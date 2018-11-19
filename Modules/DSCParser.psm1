@@ -38,7 +38,7 @@
     
     # Loop through all the Resources identified within our configuration
     $currentIndex = 1
-    foreach($group in $componentsArray)
+    foreach($group in ($componentsArray | Sort-Object Start))
     {
         # Display some progress to the user letting him know how many resources there are to be parsed in total;
         Write-Progress -PercentComplete ($currentIndex / $componentsArray.Count * 100) -Activity "Parsing $($resource.Content) [$($currentIndex)/$($componentsArray.Count)]"
