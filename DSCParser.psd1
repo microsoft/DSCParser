@@ -12,7 +12,7 @@
 # RootModule = ''
 
 # Version number of this module.
-ModuleVersion = '1.0.0.0'
+ModuleVersion = '1.0.0.1'
 
 # ID used to uniquely identify this module
 GUID = 'e168239a-233d-468d-9025-d6dfc0e4e2b6'
@@ -108,7 +108,7 @@ PrivateData = @{
 
         # ReleaseNotes of this module
         ReleaseNotes = "
-      	* Initial Release
+      	* Fixes for multipart Variables values
       "
     } # End of PSData hashtable
 

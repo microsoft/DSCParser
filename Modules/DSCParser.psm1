@@ -13,9 +13,9 @@
     #endregion
 
     # Define components we wish to filter out
-    $noisyTypes = @("NewLine", "StatementSeparator", "GroupStart", "Command", "CommandArgument", "CommandParameter", "Operator", "GroupEnd", "Comment")
+    $noisyTypes = @("NewLine", "StatementSeparator", "GroupStart", "Command", "CommandArgument", "CommandParameter", "GroupEnd", "Comment")
     $noisyParts = @("in", "if", "node", "localconfigurationmanager", "for", "foreach", "when", "configuration", "Where", "_")
-    $noisyOperators = (".", ",", "")
+    $noisyOperators = (".",",", "")
     
     # Tokenize the file's content to break it down into its various components;
     $parsedData = [System.Management.Automation.PSParser]::Tokenize((Get-Content $Path), [ref]$null)
@@ -44,6 +44,7 @@
         Write-Progress -PercentComplete ($currentIndex / $componentsArray.Count * 100) -Activity "Parsing $($resource.Content) [$($currentIndex)/$($componentsArray.Count)]"
         
         $keywordFound = $false
+        $currentPropertyIndex = 0
         foreach($component in $group)
         {
             if($component.Type -eq "Keyword")
@@ -51,21 +52,39 @@
                 $result = @{ ResourceName = $component.Content }
                 $keywordFound = $true
             }
-            elseif($component.Content -notin $noisyOperators -and $keywordFound)
+            elseif($keywordFound)
             {
-                switch($component.Type)
+                # If the next component is not an operator, that means that the current member is part of the previous property's
+                # value;
+                if($group[$currentPropertyIndex + 1].Type -ne "Operator" -and $component.Content -ne "=" -or `
+                  ($group[$currentPropertyIndex + 1].Type -eq "Operator" -and $group[$currentPropertyIndex + 1].Content -eq "."))
                 {
-                    "Member" {
-                        $currentProperty = $component.Content.ToString()
-
-                        if(!$result.Contains($currentProperty))
-                        {
-                            $result.Add($currentProperty, $null)
+                    switch($component.Type)
+                    {                    
+                        {$_ -in @("String","Number")} {
+                            $result.$currentProperty += $component.Content
+                        }
+                        {$_ -in @("Variable")} {
+                            $result.$currentProperty += "`$" + $component.Content
                         }
                     }
-                    {$_ -in @("Variable","String","Number")} {$result.$currentProperty = $component.Content}
+                }
+                elseif($component.Content -notin $noisyOperators)
+                {
+                    switch($component.Type)
+                    {
+                        "Member" {
+                            $currentProperty = $component.Content.ToString()
+
+                            if(!$result.Contains($currentProperty))
+                            {
+                                $result.Add($currentProperty, $null)
+                            }
+                        }
+                    }
                 }
             }
+            $currentPropertyIndex++
         }
 
         if($keywordFound)
