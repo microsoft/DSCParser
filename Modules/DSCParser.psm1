@@ -67,6 +67,9 @@
                         {$_ -in @("Variable")} {
                             $result.$currentProperty += "`$" + $component.Content
                         }
+                        {$_ -in @("Member")} {
+                            $result.$currentProperty += "." + $component.Content
+                        }
                     }
                 }
                 elseif($component.Content -notin $noisyOperators)
