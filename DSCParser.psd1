@@ -12,7 +12,7 @@
 # RootModule = ''
 
 # Version number of this module.
-ModuleVersion = '1.0.0.2'
+ModuleVersion = '1.0.0.3'
 
 # ID used to uniquely identify this module
 GUID = 'e168239a-233d-468d-9025-d6dfc0e4e2b6'
@@ -104,7 +104,7 @@ PrivateData = @{
         ProjectUri = 'https://github.com/Microsoft/DSCParser'
 
         # A URL to an icon representing this module.
-        # IconUri = 'https://github.com/Microsoft/DSCParser/blob/master/Images/DSCParser.png?raw=true'
+        IconUri = 'https://github.com/Microsoft/DSCParser/blob/master/Images/DSCParser.png?raw=true'
 
         # ReleaseNotes of this module
         ReleaseNotes = "
