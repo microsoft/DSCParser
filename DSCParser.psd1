@@ -104,7 +104,7 @@ PrivateData = @{
         ProjectUri = 'https://github.com/Microsoft/DSCParser'
 
         # A URL to an icon representing this module.
-        # IconUri = 'https://github.com/Microsoft/DSCParser/blob/master/Images/DSCParser.png?raw=true'
+        IconUri = 'https://github.com/Microsoft/DSCParser/blob/master/Images/DSCParser.png?raw=true'
 
         # ReleaseNotes of this module
         ReleaseNotes = "
