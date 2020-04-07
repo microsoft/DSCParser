@@ -20,18 +20,31 @@
     # Tokenize the file's content to break it down into its various components;
     $parsedData = [System.Management.Automation.PSParser]::Tokenize((Get-Content $Path), [ref]$null)
 
-    $componentsArray = @()
+    [array]$componentsArray = @()
     $currentValues = @()
+    $nodeKeyWordEncountered = $false
     for ($i = 0; $i -lt $parsedData.Count; $i++)
     {    
-        if ($parsedData[$i].Type -notin $noisyTypes -and $parsedData[$i].Content -notin $noisyParts)
+        if ($nodeKeyWordEncountered)
         {
-            $currentValues += $parsedData[$i]
+            if ($parsedData[$i].Type -notin $noisyTypes -and $parsedData[$i].Content -notin $noisyParts)
+            {
+                $currentValues += $parsedData[$i]
+            }
+            elseif (($parsedData[$i].Type -eq "GroupEnd" -and $parsedData[$i-2].Content -ne 'parameter' -and $parsedData[$i].Content -ne '}') -or 
+                ($parsedData[$i].Type -eq "GroupStart" -and $parsedData[$i-1].Content -ne 'parameter' -and $parsedData[$i].Content -ne '{'))
+            {
+                $currentValues += $parsedData[$i]
+            }
+            elseif($parsedData[$i].Type -eq "GroupEnd" -and $parsedData[$i].Content -eq '}')
+            {
+                $componentsArray += ,$currentValues
+                $currentValues = @()
+            }
         }
-        elseif ($parsedData[$i].Type -eq "GroupEnd")
+        elseif ($parsedData[$i].Content -eq 'node')
         {
-            $componentsArray+= ,$currentValues
-            $currentValues = @()
+            $nodeKeyWordEncountered = $true
         }
     }
     
@@ -40,12 +53,17 @@
     foreach ($group in ($componentsArray | Sort-Object Start))
     {
         # Display some progress to the user letting him know how many resources there are to be parsed in total;
-        Write-Progress -PercentComplete ($currentIndex / $componentsArray.Count * 100) -Activity "Parsing $($resource.Content) [$($currentIndex)/$($componentsArray.Count)]"
+        if ($currentIndex -gt $componentsArray.Count-2)
+        {
+            $currentIndex = $componentsArray.Count-2
+        }
+        Write-Progress -PercentComplete ($currentIndex / ($componentsArray.Count-2) * 100) -Activity "Parsing $($resource.Content) [$($currentIndex)/$($componentsArray.Count-2)]"
         
         $keywordFound = $false
         $currentPropertyIndex = 0
-        foreach ($component in $group)
+        while ($currentPropertyIndex -lt $group.Count)
         {
+            $component = $group[$currentPropertyIndex]
             if ($component.Type -eq "Keyword")
             {
                 $result = @{ ResourceName = $component.Content }
@@ -68,6 +86,28 @@
                         }
                         {$_ -in @("Member")} {
                             $result.$currentProperty += "." + $component.Content
+                        }
+                        {$_ -in @("GroupStart")} {
+                            $result.$currentProperty += "@("
+
+                            do
+                            {
+                                if ($group[$currentPropertyIndex].Content -notin @("@(", ")"))
+                                {
+                                    $result.$currentProperty += "`"" + $group[$currentPropertyIndex].Content + "`",`""
+                                }
+                                $currentPropertyIndex++
+                            }
+                            while ($group[$currentPropertyIndex].Type -ne 'GroupEnd')
+
+                            if (($result.$currentProperty).EndsWith(","))
+                            {
+                                $result.$currentProperty = ($result.$CurrentProperty).Substring(0, ($result.$CurrentProperty).Length -1) + ")"
+                            }
+                            else
+                            {
+                                $result.$currentProperty += ')'
+                            }
                         }
                     }
                 }
