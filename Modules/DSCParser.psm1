@@ -90,9 +90,9 @@ function Get-HashtableFromGroup
     foreach ($group in $Groups)
     {
         $keywordFound = $false
-        if (-not $IsSubGroup)
+        if (-not $IsSubGroup -and $currentIndex -le $Groups.Count-2)
         {
-            Write-Progress -PercentComplete ($currentIndex / ($Groups.Count) * 100) -Activity "Parsing $($resource.Content) [$($currentIndex)/$($Groups.Count-2)]"
+            Write-Progress -PercentComplete ($currentIndex / ($Groups.Count-2) * 100) -Activity "Parsing $($resource.Content) [$($currentIndex)/$($Groups.Count-2)]"
         }
         $currentPropertyIndex = 0
         $currentProperty = ''
