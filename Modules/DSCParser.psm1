@@ -27,11 +27,11 @@
     {
         throw "You need to specify either Path or Content as parameters."
     }
-    elseif ($null -ne $Path)
+    elseif (![System.String]::IsNullOrEmpty($Path))
     {
         $parsedData = [System.Management.Automation.PSParser]::Tokenize((Get-Content $Path), [ref]$null)
     }
-    elseif ($null -ne $Content)
+    elseif (![System.String]::IsNullOrEmpty($Content))
     {
         $parsedData = [System.Management.Automation.PSParser]::Tokenize($Content, [ref]$null)
     }
