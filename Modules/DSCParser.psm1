@@ -22,7 +22,8 @@
     $noisyOperators = (".",",", "")
     
     # Tokenize the file's content to break it down into its various components;
-    if (($null -eq $Path -and $null -eq $Content) -or ($null -ne $Path -and $null -ne $Content))
+    if (([System.String]::IsNullOrEmpty($Path) -and [System.String]::IsNullOrEmpty($Content)) -or `
+        (![System.String]::IsNullOrEmpty($Path) -and ![System.String]::IsNullOrEmpty($Content)))
     {
         throw "You need to specify either Path or Content as parameters."
     }
