@@ -3,9 +3,13 @@
     [CmdletBinding()]
     param
     (
-        [Parameter(Mandatory = $true,Position = 1)]
-        [string]
-        $Path
+        [Parameter()]
+        [System.String]
+        $Path,
+
+        [Parameter()]
+        [System.String]
+        $Content
     )
 
     #region Variables
@@ -18,7 +22,18 @@
     $noisyOperators = (".",",", "")
     
     # Tokenize the file's content to break it down into its various components;
-    $parsedData = [System.Management.Automation.PSParser]::Tokenize((Get-Content $Path), [ref]$null)
+    if (($null -eq $Path -and $null -eq $Content) -or ($null -ne $Path -and $null -ne $Content))
+    {
+        throw "You need to specify either Path or Content as parameters."
+    }
+    elseif ($null -ne $Path)
+    {
+        $parsedData = [System.Management.Automation.PSParser]::Tokenize((Get-Content $Path), [ref]$null)
+    }
+    elseif ($null -ne $Content)
+    {
+        $parsedData = [System.Management.Automation.PSParser]::Tokenize($Content, [ref]$null)
+    }
 
     [array]$componentsArray = @()
     $currentValues = @()
@@ -65,7 +80,7 @@
         }
     }
 
-    $ParsedResults = Get-HashtableFromGroup -Groups $componentsArray
+    $ParsedResults = Get-HashtableFromGroup -Groups $componentsArray -Path $Path
     return $ParsedResults
 }
 
@@ -77,6 +92,10 @@ function Get-HashtableFromGroup
         [Parameter(Mandatory = $true)]
         [System.Array]
         $Groups,
+
+        [Parameter(Mandatory = $true)]
+        [System.Array]
+        $Path,
 
         [Parameter()]
         [System.Boolean]
@@ -92,7 +111,7 @@ function Get-HashtableFromGroup
         $keywordFound = $false
         if (-not $IsSubGroup -and $currentIndex -le $Groups.Count-2)
         {
-            Write-Progress -PercentComplete ($currentIndex / ($Groups.Count-2) * 100) -Activity "Parsing $($resource.Content) [$($currentIndex)/$($Groups.Count-2)]"
+            Write-Progress -PercentComplete ($currentIndex / ($Groups.Count-2) * 100) -Activity "Parsing $Path [$($currentIndex)/$($Groups.Count-2)]"
         }
         $currentPropertyIndex = 0
         $currentProperty = ''
@@ -143,7 +162,7 @@ function Get-HashtableFromGroup
                         $currentPosition++
                     }
                     $currentPropertyIndex = $currentPosition
-                    $subResult = Get-HashtableFromGroup -Groups $allSubGroups -IsSubGroup $true
+                    $subResult = Get-HashtableFromGroup -Groups $allSubGroups -IsSubGroup $true -Path $Path
                     $allSubGroups = @()
                     $subGroup = @()
                     $result.$currentProperty = $subResult
