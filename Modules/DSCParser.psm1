@@ -9,7 +9,11 @@
 
         [Parameter()]
         [System.String]
-        $Content
+        $Content,
+
+        [Parameter()]
+        [System.Boolean]
+        $IncludeComments = $false
     )
 
     #region Variables
@@ -17,8 +21,13 @@
     #endregion
 
     # Define components we wish to filter out
-    $noisyTypes = @("NewLine", "StatementSeparator", "Command", "CommandArgument", "CommandParameter", "Comment")
-    $noisyParts = @("in", "if", "node", "localconfigurationmanager", "for", "foreach", "when", "configuration", "Where", "_")
+    $noisyTypesDesktop = @("NewLine", "StatementSeparator", "Command", "CommandArgument", "CommandParameter")
+    $noisyTypesCore = @("NewLine", "StatementSeparator", "CommandArgument", "CommandParameter")
+    if (-not $IncludeComments)
+    {
+        $noisyTypesDesktop += "Comment"
+        $noisyTypesCore += "Comment"
+    }
     $noisyOperators = (".",",", "")
     
     # Tokenize the file's content to break it down into its various components;
@@ -183,6 +192,9 @@ function Get-HashtableFromGroup
                         }
                         {$_ -in @("Member")} {
                             $result.$currentProperty += "." + $component.Content
+                        }
+                        {$_ -in @("Comment")} {
+                            $result.$("_metadata_" + $currentProperty) += $component.Content
                         }
                         {$_ -in @("GroupStart")} {
                             $result.$currentProperty += "@("
