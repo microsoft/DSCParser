@@ -246,3 +246,69 @@ function Get-HashtableFromGroup
     }
     return $ParsedResults
 }
+
+function Get-VariableListFromDSC
+{
+    [CmdletBinding()]
+    [OutputType([System.Collections.Hashtable])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.String]
+        $Path
+    )
+
+    $parsedData = [System.Management.Automation.PSParser]::Tokenize((Get-Content $Path), [ref]$null)
+    $results = @{}
+    for ($i = 0; $i -le $parsedData.Count; $i++)
+    {
+        if ($parsedData[$i].Type -eq "Variable")
+        {
+            $variableName = $parsedData[$i].Content
+            if ($parsedData[$i+1].Type -eq 'Operator' -and $parsedData[$i+1].Content -eq '=')
+            {
+                if ($parsedData[$i+2].Type -in @("Command", "Variable"))
+                {
+                    $variableValue = ""
+
+                    $currentIndex = 2
+                    do
+                    {
+                        if ($parsedData[$i+$currentIndex].Type -eq 'CommandParameter')
+                        {
+                            $variableValue += " " + $parsedData[$i+$currentIndex].Content
+                        }
+                        elseif ($parsedData[$i+$currentIndex].Type -eq 'String')
+                        {
+                            if ($parsedData[$i+$currentIndex-1].Type -ne 'GroupStart')
+                            {
+                                $variableValue += ' '
+                            }
+                            $variableValue += "`"" + $parsedData[$i+$currentIndex].Content + "`""
+                        }
+                        elseif ($parsedData[$i+$currentIndex].Type -eq 'Variable')
+                        {
+                            $variableValue += "`$" + $parsedData[$i+$currentIndex].Content
+                        }
+                        else
+                        {
+                            $variableValue += $parsedData[$i+$currentIndex].Content
+                        }
+                        $currentIndex++
+                    }
+                    while ($parsedData[$i+$currentIndex].Type -ne 'Newline')
+                    $variableValue = [ScriptBlock]::Create($variableValue)
+                }
+                else
+                {
+                    $variableValue = $parsedData[$i+2].Content
+                }
+
+                if (-not $results.Contains($variableName))
+                {
+                    $results.Add($variableName, $variableValue)
+                }
+            }
+        }
+    }
+    return $results
+}

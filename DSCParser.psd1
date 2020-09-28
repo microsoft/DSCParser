@@ -69,7 +69,7 @@ NestedModules = @("modules\DSCParser.psm1")
 #FunctionsToExport = '*'
 
 # Cmdlets to export from this module
-CmdletsToExport = @("ConvertTo-DSCObject")
+CmdletsToExport = @("ConvertTo-DSCObject", "Get-VariableListFromDSC")
 
 # Variables to export from this module
 #VariablesToExport = '*'
