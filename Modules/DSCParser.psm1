@@ -250,7 +250,7 @@ function Get-HashtableFromGroup
 function Get-VariableListFromDSC
 {
     [CmdletBinding()]
-    [OutputType([System.Collections.Hashtable])]
+    [OutputType([System.Collections.Hashtable[]])]
     param(
         [Parameter(Mandatory = $true)]
         [System.String]
@@ -258,7 +258,7 @@ function Get-VariableListFromDSC
     )
 
     $parsedData = [System.Management.Automation.PSParser]::Tokenize((Get-Content $Path), [ref]$null)
-    $results = @{}
+    $results = @()
     for ($i = 0; $i -le $parsedData.Count; $i++)
     {
         if ($parsedData[$i].Type -eq "Variable")
@@ -296,7 +296,6 @@ function Get-VariableListFromDSC
                         $currentIndex++
                     }
                     while ($parsedData[$i+$currentIndex].Type -ne 'Newline')
-                    $variableValue = [ScriptBlock]::Create($variableValue)
                 }
                 else
                 {
@@ -305,7 +304,24 @@ function Get-VariableListFromDSC
 
                 if (-not $results.Contains($variableName))
                 {
-                    $results.Add($variableName, $variableValue)
+                    $keyFound = $false
+                    foreach ($entry in $results)
+                    {
+                        if ($entry.Name -eq $variableName)
+                        {
+                            $keyFound = $true
+                            break
+                        }
+                    }
+
+                    if (-not $KeyFound)
+                    {
+                        $currentHash = @{
+                            Name  = $VariableName
+                            Value = $VariableValue
+                        }
+                        $results += $currentHash
+                    }
                 }
             }
         }
