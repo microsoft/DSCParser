@@ -9,7 +9,11 @@
 
         [Parameter()]
         [System.String]
-        $Content
+        $Content,
+
+        [Parameter()]
+        [System.Boolean]
+        $IncludeComments = $false
     )
 
     #region Variables
@@ -17,8 +21,13 @@
     #endregion
 
     # Define components we wish to filter out
-    $noisyTypes = @("NewLine", "StatementSeparator", "Command", "CommandArgument", "CommandParameter", "Comment")
-    $noisyParts = @("in", "if", "node", "localconfigurationmanager", "for", "foreach", "when", "configuration", "Where", "_")
+    $noisyTypesDesktop = @("NewLine", "StatementSeparator", "Command", "CommandArgument", "CommandParameter")
+    $noisyTypesCore = @("NewLine", "StatementSeparator", "CommandArgument", "CommandParameter")
+    if (-not $IncludeComments)
+    {
+        $noisyTypesDesktop += "Comment"
+        $noisyTypesCore += "Comment"
+    }
     $noisyOperators = (".",",", "")
     
     # Tokenize the file's content to break it down into its various components;
@@ -184,26 +193,60 @@ function Get-HashtableFromGroup
                         {$_ -in @("Member")} {
                             $result.$currentProperty += "." + $component.Content
                         }
+                        {$_ -in @("Comment")} {
+                            $result.$("_metadata_" + $currentProperty) += $component.Content
+                        }
                         {$_ -in @("GroupStart")} {
-                            $result.$currentProperty += "@("
 
-                            do
+                            # Property is an Array
+                            $result.$currentProperty = @()
+                            $currentPropertyIndex++
+                            while ($group[$currentPropertyIndex].Type -eq 'NewLine')
                             {
-                                if ($group[$currentPropertyIndex].Content -notin @("@(", ")"))
-                                {
-                                    $result.$currentProperty += "`"" + $group[$currentPropertyIndex].Content + "`",`""
-                                }
                                 $currentPropertyIndex++
                             }
-                            while ($group[$currentPropertyIndex].Type -ne 'GroupEnd')
 
-                            if (($result.$currentProperty).EndsWith(","))
+                            switch ($group[$currentPropertyIndex].Type)
                             {
-                                $result.$currentProperty = ($result.$CurrentProperty).Substring(0, ($result.$CurrentProperty).Length -1) + ")"
-                            }
-                            else
-                            {
-                                $result.$currentProperty += ')'
+                                # Property is an array of string or integer
+                                {$_ -in @("String", "Number")} {
+                                    do
+                                    {
+                                        if ($group[$currentPropertyIndex].Content -notin $noisyOperators)
+                                        {
+                                            $result.$currentProperty += $group[$currentPropertyIndex].Content
+                                        }
+                                        $currentPropertyIndex++
+                                    }
+                                    while ($group[$currentPropertyIndex].Type -ne 'GroupEnd')
+                                }
+
+                                # Property is an array of CIMInstance
+                                "Keyword"{
+                                    $CimInstanceComponents = @()
+                                    $GroupsToClose = 0
+                                    $FoundOneGroup = $false
+                                    do
+                                    {
+                                        if ($group[$currentPropertyIndex].Type -eq 'GroupStart')
+                                        {
+                                            $FoundOneGroup = $true
+                                            $GroupsToClose ++
+                                        }
+                                        elseif ($group[$currentPropertyIndex].Type -eq 'GroupEnd')
+                                        {
+                                            $GroupsToClose --
+                                        }
+                                        if ($group[$currentPropertyIndex].Content -notin $noisyOperators)
+                                        {
+                                            $CimInstanceComponents += $group[$currentPropertyIndex]
+                                        }
+                                        $currentPropertyIndex++
+                                    }
+                                    while ($group[$currentPropertyIndex-1].Type -ne 'GroupEnd' -or $GroupsToClose -ne 0 -or -not $FoundOneGroup)
+                                    $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents
+                                    $result.$CurrentProperty = $CimInstanceObject
+                                }
                             }
                         }
                     }
@@ -233,4 +276,108 @@ function Get-HashtableFromGroup
         $currentIndex++
     }
     return $ParsedResults
+}
+
+function Convert-CIMInstanceToPSObject
+{
+    [CmdletBinding()]
+    [OutputType([System.Collections.Hashtable])]
+    Param(
+        [Parameter(Mandatory = $true)]
+        [System.Object[]]
+        $CIMInstance
+    )
+
+    $result = @{}
+    $index = 0
+    $CurrentMemberName = $null
+    while($index -lt $CimInstance.Count)
+    {
+        $token = $CIMInstance[$index]
+        switch ($token.Type)
+        {
+            # The main token for the CIMInstance
+            "Keyword" {
+                $result.Add("CIMInstance", $token.Content)
+            }
+            "Member" {
+                $result.Add($token.Content, "")
+                $CurrentMemberName = $token.Content
+            }
+            { $_ -in "String", "Number", "Variable"} {
+                # Get the name of the Member associated with this value;
+                $content = $token.Content
+                if ($content.ToLower() -eq 'true')
+                {
+                    $content = $true
+                }
+                elseif ($content.ToLower() -eq 'false')
+                {
+                    $content = $false
+                }
+                $result.$CurrentMemberName = $content
+            }
+            {$_ -eq "GroupStart" -and $token.Content -eq '@('} {
+                $result.$CurrentMemberName = @()                
+                $index++
+                while ($CimInstance[$index].Type -eq 'NewLine')
+                {
+                    $index++
+                }
+                switch ($CIMInstance[$index].Type)
+                {                    
+                    { $_ -in "String", "Number", "Variable"} {
+                        $arrayContent = @()
+                        do {
+                            $content = $CIMInstance[$index].Content
+                            if ($content.ToLower() -eq 'true')
+                            {
+                                $content = $true
+                            }
+                            elseif ($content.ToLower() -eq 'false')
+                            {
+                                $content = $false
+                            }
+                            $arrayContent += $content
+                            $index++
+                        } while ($CIMInstance[$index].Type -ne 'GroupEnd')
+                        $result.$CurrentMemberName = $arrayContent
+                    }
+
+                    # The Content of the Array is yet again CIMInstances. Recursively call into the current method;
+                    "Keyword" {
+                        while ($CIMInstance[$index].Content -ne ')' -and $CImInstance[$index].Type -ne 'GroupEnd')
+                        {
+                            $CIMInstanceComponents = @()
+                            $GroupsToClose = 0
+                            $FoundOneGroup = $false
+                            do
+                            {
+                                if ($CIMInstance[$index].Type -eq 'GroupStart')
+                                {
+                                    $FoundOneGroup = $true
+                                    $GroupsToClose ++
+                                }
+                                elseif ($CIMInstance[$index].Type -eq 'GroupEnd')
+                                {
+                                    $GroupsToClose --
+                                }
+                                if ($CIMInstance[$index].Content -notin $noisyOperators)
+                                {
+                                    $CimInstanceComponents += $CIMInstance[$index]
+                                }
+                                $index++
+                            }
+                            while ($CIMInstance[$index-1].Type -ne 'GroupEnd' -or $GroupsToClose -ne 0 -or -not $FoundOneGroup)
+                            $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents
+                            $result.$CurrentMemberName += $CimInstanceObject  
+                            $index++
+                        }                      
+                    }
+                }
+            }
+        }
+        $index++
+    }
+    return $result
 }
