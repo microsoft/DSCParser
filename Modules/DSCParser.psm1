@@ -86,6 +86,11 @@
             {
                 $i++
                 $newIndexPosition = $i+1
+                if ($null -eq $parsedData[$newIndexPosition])
+                {
+                    Write-Warning "The configuration might be empty, please check it."
+                    return
+                }
             }
         }
     }
