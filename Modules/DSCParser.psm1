@@ -82,7 +82,7 @@
         {
             $nodeKeyWordEncountered = $true
             $newIndexPosition = $i+1
-            while ($parsedData[$newIndexPosition].Type -ne 'Keyword')
+            while ($parsedData[$newIndexPosition].Type -ne 'Keyword' -and $i -lt $parsedData.Count)
             {
                 $i++
                 $newIndexPosition = $i+1
@@ -90,7 +90,11 @@
         }
     }
 
-    $ParsedResults = Get-HashtableFromGroup -Groups $componentsArray -Path $Path
+    $ParsedResults = $null
+    if ($componentsArray.Count -gt 0)
+    {
+        $ParsedResults = Get-HashtableFromGroup -Groups $componentsArray -Path $Path
+    }
     return $ParsedResults
 }
 
