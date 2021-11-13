@@ -179,7 +179,7 @@ function Get-HashtableFromGroup
                     $subResult = Get-HashtableFromGroup -Groups $allSubGroups -IsSubGroup $true -Path $Path
                     $allSubGroups = @()
                     $subGroup = @()
-                    $result.$currentProperty = $subResult
+                    $result.$currentProperty += $subResult
                 }
                 # If the next component is not an operator, that means that the current member is part of the previous property's
                 # value;
