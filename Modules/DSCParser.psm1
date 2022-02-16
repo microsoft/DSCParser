@@ -134,7 +134,7 @@ function Get-HashtableFromGroup
             $component = $group[$currentPropertyIndex]
             if ($component.Type -eq "Keyword" -and -not $keywordFound)
             {
-                $result = @{ ResourceName = $component.Content }
+                $result = [ordered] @{ ResourceName = $component.Content }
                 $keywordFound = $true
             }
             elseif ($keywordFound)
