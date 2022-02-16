@@ -303,7 +303,7 @@ function Convert-CIMInstanceToPSObject
         $CIMInstance
     )
 
-    $result = @{}
+    $result = [ordered] @{}
     $index = 0
     $CurrentMemberName = $null
     while($index -lt $CimInstance.Count)
