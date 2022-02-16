@@ -93,7 +93,7 @@
     $ParsedResults = $null
     if ($componentsArray.Count -gt 0)
     {
-        $ParsedResults = Get-HashtableFromGroup -Groups $componentsArray -Path $Path
+        $ParsedResults = Get-HashtableFromGroup -Groups $componentsArray -Path $Path -IncludeComments:$IncludeComments.IsPresent
     }
     return $ParsedResults
 }
@@ -113,7 +113,9 @@ function Get-HashtableFromGroup
 
         [Parameter()]
         [System.Boolean]
-        $IsSubGroup = $false
+        $IsSubGroup = $false,
+
+        [switch] $IncludeComments
     )
 
     # Loop through all the Resources identified within our configuration
@@ -176,7 +178,7 @@ function Get-HashtableFromGroup
                         $currentPosition++
                     }
                     $currentPropertyIndex = $currentPosition
-                    $subResult = Get-HashtableFromGroup -Groups $allSubGroups -IsSubGroup $true -Path $Path
+                    $subResult = Get-HashtableFromGroup -Groups $allSubGroups -IsSubGroup $true -Path $Path -IncludeComments:$IncludeComments.IsPresent
                     $allSubGroups = @()
                     $subGroup = @()
                     $result.$currentProperty += $subResult
@@ -205,7 +207,9 @@ function Get-HashtableFromGroup
                             break
                         }
                         {$_ -in @("Comment")} {
-                            $result.$("_metadata_" + $currentProperty) += $component.Content
+                            if ($IncludeComments) {
+                                $result.$("_metadata_" + $currentProperty) += $component.Content
+                            }
                             break
                         }
                         {$_ -in @("GroupStart")} {
