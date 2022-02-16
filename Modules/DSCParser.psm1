@@ -200,6 +200,10 @@ function Get-HashtableFromGroup
                             $result.$currentProperty += "." + $component.Content
                             break
                         }
+                        {$_ -in @("Command")} {
+                            $result.ResourceID += $component.Content
+                            break
+                        }
                         {$_ -in @("Comment")} {
                             $result.$("_metadata_" + $currentProperty) += $component.Content
                             break
