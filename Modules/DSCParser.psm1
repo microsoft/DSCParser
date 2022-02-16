@@ -101,7 +101,7 @@
 function Get-HashtableFromGroup
 {
     [CmdletBinding()]
-    [OutputType([System.Collections.Hashtable])]
+    [OutputType([System.Collections.IDictionary])]
     param(
         [Parameter(Mandatory = $true)]
         [System.Array]
@@ -296,7 +296,7 @@ function Get-HashtableFromGroup
 function Convert-CIMInstanceToPSObject
 {
     [CmdletBinding()]
-    [OutputType([System.Collections.Hashtable])]
+    [OutputType([System.Collections.IDictionary])]
     Param(
         [Parameter(Mandatory = $true)]
         [System.Object[]]
