@@ -190,15 +190,19 @@ function Get-HashtableFromGroup
                     {
                         {$_ -in @("String","Number")} {
                             $result.$currentProperty += $component.Content
+                            break
                         }
                         {$_ -in @("Variable")} {
                             $result.$currentProperty += "`$" + $component.Content
+                            break
                         }
                         {$_ -in @("Member")} {
                             $result.$currentProperty += "." + $component.Content
+                            break
                         }
                         {$_ -in @("Comment")} {
                             $result.$("_metadata_" + $currentProperty) += $component.Content
+                            break
                         }
                         {$_ -in @("GroupStart")} {
 
@@ -223,6 +227,7 @@ function Get-HashtableFromGroup
                                         $currentPropertyIndex++
                                     }
                                     while ($group[$currentPropertyIndex].Type -ne 'GroupEnd')
+                                    break
                                 }
 
                                 # Property is an array of CIMInstance
@@ -250,8 +255,10 @@ function Get-HashtableFromGroup
                                     while ($group[$currentPropertyIndex-1].Type -ne 'GroupEnd' -or $GroupsToClose -ne 0 -or -not $FoundOneGroup)
                                     $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents
                                     $result.$CurrentProperty += $CimInstanceObject
+                                    break
                                 }
                             }
+                            break
                         }
                     }
                 }
