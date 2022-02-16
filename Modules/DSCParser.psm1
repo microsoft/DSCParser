@@ -29,7 +29,7 @@
         $noisyTypesCore += "Comment"
     }
     $noisyOperators = (".",",", "")
-    
+
     # Tokenize the file's content to break it down into its various components;
     if (([System.String]::IsNullOrEmpty($Path) -and [System.String]::IsNullOrEmpty($Content)) -or `
         (![System.String]::IsNullOrEmpty($Path) -and ![System.String]::IsNullOrEmpty($Content)))
@@ -50,7 +50,7 @@
     $nodeKeyWordEncountered = $false
     $ObjectsToClose = 0
     for ($i = 0; $i -lt $parsedData.Count; $i++)
-    {    
+    {
         if ($nodeKeyWordEncountered)
         {
             if ($parsedData[$i].Type -eq "GroupStart" -or $parsedData[$i].Content -eq '{')
@@ -72,7 +72,7 @@
                     $ObjectsToClose = 0
                 }
             }
-            elseif (($parsedData[$i].Type -eq "GroupEnd" -and $parsedData[$i-2].Content -ne 'parameter' -and $parsedData[$i].Content -ne '}') -or 
+            elseif (($parsedData[$i].Type -eq "GroupEnd" -and $parsedData[$i-2].Content -ne 'parameter' -and $parsedData[$i].Content -ne '}') -or
                 ($parsedData[$i].Type -eq "GroupStart" -and $parsedData[$i-1].Content -ne 'parameter' -and $parsedData[$i].Content -ne '{'))
             {
                 $currentValues += $parsedData[$i]
@@ -167,7 +167,7 @@ function Get-HashtableFromGroup
                         {
                             $currentGroupEndFound = $true
                         }
-                        
+
                         if ($ObjectsToClose -eq 0 -and $group[$currentPosition].Type -ne 'Keyword')
                         {
                             $allSubGroups += ,$subGroup
@@ -249,7 +249,7 @@ function Get-HashtableFromGroup
                                     }
                                     while ($group[$currentPropertyIndex-1].Type -ne 'GroupEnd' -or $GroupsToClose -ne 0 -or -not $FoundOneGroup)
                                     $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents
-                                    $result.$CurrentProperty = $CimInstanceObject
+                                    $result.$CurrentProperty += $CimInstanceObject
                                 }
                             }
                         }
@@ -322,14 +322,14 @@ function Convert-CIMInstanceToPSObject
                 $result.$CurrentMemberName = $content
             }
             {$_ -eq "GroupStart" -and $token.Content -eq '@('} {
-                $result.$CurrentMemberName = @()                
+                $result.$CurrentMemberName = @()
                 $index++
                 while ($CimInstance[$index].Type -eq 'NewLine')
                 {
                     $index++
                 }
                 switch ($CIMInstance[$index].Type)
-                {                    
+                {
                     { $_ -in "String", "Number", "Variable"} {
                         $arrayContent = @()
                         do {
@@ -374,9 +374,9 @@ function Convert-CIMInstanceToPSObject
                             }
                             while ($CIMInstance[$index-1].Type -ne 'GroupEnd' -or $GroupsToClose -ne 0 -or -not $FoundOneGroup)
                             $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents
-                            $result.$CurrentMemberName += $CimInstanceObject  
+                            $result.$CurrentMemberName += $CimInstanceObject
                             $index++
-                        }                      
+                        }
                     }
                 }
             }
