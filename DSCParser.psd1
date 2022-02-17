@@ -66,16 +66,16 @@ PowerShellVersion = '4.0'
 NestedModules = @("modules\DSCParser.psm1")
 
 # Functions to export from this module
-#FunctionsToExport = '*'
+FunctionsToExport = @("ConvertTo-DSCObject")
 
 # Cmdlets to export from this module
-CmdletsToExport = @("ConvertTo-DSCObject", "Get-VariableListFromDSC")
+CmdletsToExport = @()
 
 # Variables to export from this module
 #VariablesToExport = '*'
 
 # Aliases to export from this module
-#AliasesToExport = '*'
+AliasesToExport = @()
 
 # List of all modules packaged with this module
 # ModuleList = @()
