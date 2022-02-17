@@ -10,3 +10,10 @@ DSCParser is available from the PowerShell Gallery, simply run:
 ```powershell
 Install-Module DSCParser
 ```
+
+## Usage
+
+```powershell
+$DSCObjects = ConvertTo-DSCObject -Path $PSScriptRoot\..\Tests\Templates\Template1.ps1 -IncludeComments $true
+$DSCObjects | Format-Table
+```
