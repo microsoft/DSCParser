@@ -93,7 +93,7 @@
     $ParsedResults = $null
     if ($componentsArray.Count -gt 0)
     {
-        $ParsedResults = Get-HashtableFromGroup -Groups $componentsArray -Path $Path -IncludeComments:$IncludeComments.IsPresent
+        $ParsedResults = Get-HashtableFromGroup -Groups $componentsArray -Path $Path -IncludeComments:$IncludeComments
     }
     return $ParsedResults
 }
@@ -216,56 +216,61 @@ function Get-HashtableFromGroup
 
                             # Property is an Array
                             $result.$currentProperty = @()
-                            $currentPropertyIndex++
-                            while ($group[$currentPropertyIndex].Type -eq 'NewLine')
-                            {
+
+                            do {
+                                # we will need to wait till we find end of array rather than terminating the loop early on
                                 $currentPropertyIndex++
-                            }
-
-                            switch ($group[$currentPropertyIndex].Type)
-                            {
-                                # Property is an array of string or integer
-                                {$_ -in @("String", "Number")} {
-                                    do
-                                    {
-                                        if ($group[$currentPropertyIndex].Content -notin $noisyOperators)
-                                        {
-                                            $result.$currentProperty += $group[$currentPropertyIndex].Content
-                                        }
-                                        $currentPropertyIndex++
-                                    }
-                                    while ($group[$currentPropertyIndex].Type -ne 'GroupEnd')
-                                    break
+                                while ($group[$currentPropertyIndex].Type -eq 'NewLine')
+                                {
+                                    $currentPropertyIndex++
                                 }
 
-                                # Property is an array of CIMInstance
-                                "Keyword"{
-                                    $CimInstanceComponents = @()
-                                    $GroupsToClose = 0
-                                    $FoundOneGroup = $false
-                                    do
-                                    {
-                                        if ($group[$currentPropertyIndex].Type -eq 'GroupStart')
+                                switch ($group[$currentPropertyIndex].Type)
+                                {
+                                    # Property is an array of string or integer
+                                    {$_ -in @("String", "Number")} {
+                                        do
                                         {
-                                            $FoundOneGroup = $true
-                                            $GroupsToClose ++
+                                            if ($group[$currentPropertyIndex].Content -notin $noisyOperators)
+                                            {
+                                                $result.$currentProperty += $group[$currentPropertyIndex].Content
+                                            }
+                                            $currentPropertyIndex++
                                         }
-                                        elseif ($group[$currentPropertyIndex].Type -eq 'GroupEnd')
-                                        {
-                                            $GroupsToClose --
-                                        }
-                                        if ($group[$currentPropertyIndex].Content -notin $noisyOperators)
-                                        {
-                                            $CimInstanceComponents += $group[$currentPropertyIndex]
-                                        }
-                                        $currentPropertyIndex++
+                                        while ($group[$currentPropertyIndex].Type -ne 'GroupEnd')
+                                        break
                                     }
-                                    while ($group[$currentPropertyIndex-1].Type -ne 'GroupEnd' -or $GroupsToClose -ne 0 -or -not $FoundOneGroup)
-                                    $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents
-                                    $result.$CurrentProperty += $CimInstanceObject
-                                    break
+
+                                    # Property is an array of CIMInstance
+                                    "Keyword"{
+                                        $CimInstanceComponents = @()
+                                        $GroupsToClose = 0
+                                        $FoundOneGroup = $false
+                                        do
+                                        {
+                                            if ($group[$currentPropertyIndex].Type -eq 'GroupStart')
+                                            {
+                                                $FoundOneGroup = $true
+                                                $GroupsToClose ++
+                                            }
+                                            elseif ($group[$currentPropertyIndex].Type -eq 'GroupEnd')
+                                            {
+                                                $GroupsToClose --
+                                            }
+                                            if ($group[$currentPropertyIndex].Content -notin $noisyOperators)
+                                            {
+                                                $CimInstanceComponents += $group[$currentPropertyIndex]
+                                            }
+                                            $currentPropertyIndex++
+                                        }
+                                        while ($group[$currentPropertyIndex-1].Type -ne 'GroupEnd' -or $GroupsToClose -ne 0 -or -not $FoundOneGroup)
+                                        $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents
+                                        $result.$CurrentProperty += $CimInstanceObject
+                                        break
+                                    }
                                 }
-                            }
+
+                            } while ($group[$currentPropertyIndex].Type -ne 'GroupEnd' -and $token.Content -ne ')')
                             break
                         }
                     }
