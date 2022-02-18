@@ -28,7 +28,7 @@
         }
     )
 
-    $noisyOperators = (".",",", "")
+    $NoisyOperators = (".",",", "")
 
     # Tokenize the file's content to break it down into its various components;
     if (([System.String]::IsNullOrEmpty($Path) -and [System.String]::IsNullOrEmpty($Content)) -or `
@@ -93,7 +93,7 @@
     $ParsedResults = $null
     if ($componentsArray.Count -gt 0)
     {
-        $ParsedResults = Get-HashtableFromGroup -Groups $componentsArray -Path $Path -IncludeComments:$IncludeComments
+        $ParsedResults = Get-HashtableFromGroup -Groups $componentsArray -Path $Path -IncludeComments:$IncludeComments -NoisyOperators $NoisyOperators
     }
     return $ParsedResults
 }
@@ -114,6 +114,8 @@ function Get-HashtableFromGroup
         [Parameter()]
         [System.Boolean]
         $IsSubGroup = $false,
+
+        [Array] $NoisyOperators,
 
         [switch] $IncludeComments
     )
@@ -178,7 +180,7 @@ function Get-HashtableFromGroup
                         $currentPosition++
                     }
                     $currentPropertyIndex = $currentPosition
-                    $subResult = Get-HashtableFromGroup -Groups $allSubGroups -IsSubGroup $true -Path $Path -IncludeComments:$IncludeComments.IsPresent
+                    $subResult = Get-HashtableFromGroup -Groups $allSubGroups -IsSubGroup $true -Path $Path -IncludeComments:$IncludeComments.IsPresent -NoisyOperators $NoisyOperators
                     $allSubGroups = @()
                     $subGroup = @()
                     $result.$currentProperty += $subResult
@@ -303,7 +305,7 @@ function Get-HashtableFromGroup
                                             $currentPropertyIndex++
                                         }
                                         while ($group[$currentPropertyIndex-1].Type -ne 'GroupEnd' -or $GroupsToClose -ne 0 -or -not $FoundOneGroup)
-                                        $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents
+                                        $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents -NoisyOperators $NoisyOperators
                                         $result.$CurrentProperty += $CimInstanceObject
                                         break
                                     }
@@ -348,7 +350,9 @@ function Convert-CIMInstanceToPSObject
     Param(
         [Parameter(Mandatory = $true)]
         [System.Object[]]
-        $CIMInstance
+        $CIMInstance,
+
+        [Array] $NoisyOperators
     )
 
     $result = [ordered] @{}
@@ -459,7 +463,7 @@ function Convert-CIMInstanceToPSObject
                                 $index++
                             }
                             while ($CIMInstance[$index-1].Type -ne 'GroupEnd' -or $GroupsToClose -ne 0 -or -not $FoundOneGroup)
-                            $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents
+                            $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents -NoisyOperators $NoisyOperators
                             $result.$CurrentMemberName += $CimInstanceObject
                             $index++
                         }
