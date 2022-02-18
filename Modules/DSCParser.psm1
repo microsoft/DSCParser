@@ -21,13 +21,13 @@
     #endregion
 
     # Define components we wish to filter out
-    $noisyTypesDesktop = @("NewLine", "StatementSeparator", "Command", "CommandArgument", "CommandParameter")
-    $noisyTypesCore = @("NewLine", "StatementSeparator", "CommandArgument", "CommandParameter")
-    if (-not $IncludeComments)
-    {
-        $noisyTypesDesktop += "Comment"
-        $noisyTypesCore += "Comment"
-    }
+    $noisyTypes = @(
+        "StatementSeparator", "CommandArgument", "CommandParameter"
+        if (-not $IncludeComments){
+            "Comment"
+        }
+    )
+
     $noisyOperators = (".",",", "")
 
     # Tokenize the file's content to break it down into its various components;
