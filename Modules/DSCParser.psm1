@@ -195,7 +195,19 @@ function Get-HashtableFromGroup
                             break
                         }
                         {$_ -in @("Variable")} {
-                            $result.$currentProperty += "`$" + $component.Content
+                            # Based on the logic if if it's TRUE or FALSE we keep it as a boolean
+                            # if it's other type of variable we keep it as a string with added $ character
+                            if ($component.Content.ToLower() -eq 'true')
+                            {
+                                $result.$currentProperty += $true
+                            }
+                            elseif ($component.Content.ToLower() -eq 'false')
+                            {
+                                $result.$currentProperty += $false
+                            }
+                            else {
+                                $result.$currentProperty += "`$" + $component.Content
+                            }
                             break
                         }
                         {$_ -in @("Member")} {
@@ -228,12 +240,31 @@ function Get-HashtableFromGroup
                                 switch ($group[$currentPropertyIndex].Type)
                                 {
                                     # Property is an array of string or integer
-                                    {$_ -in @("String", "Number")} {
+                                    {$_ -in @("String", "Number", "Variable")} {
                                         do
                                         {
+                                            $ValueToSet = $group[$currentPropertyIndex].Content
                                             if ($group[$currentPropertyIndex].Content -notin $noisyOperators)
                                             {
-                                                $result.$currentProperty += $group[$currentPropertyIndex].Content
+                                                $Type = $group[$currentPropertyIndex].Type
+                                                if ($Type -eq "Variable") {
+                                                    # Based on the logic if if it's TRUE or FALSE we keep it as a boolean
+                                                    # if it's other type of variable we keep it as a string with added $ character
+
+                                                    if ($ValueToSet.ToLower() -eq 'true')
+                                                    {
+                                                        $ValueToSet = $true
+                                                    }
+                                                    elseif ($ValueToSet.ToLower() -eq 'false')
+                                                    {
+                                                        $ValueToSet = $false
+                                                    }
+                                                    else {
+                                                        $ValueToSet = "`$" + $ValueToSet
+                                                    }
+                                                }
+
+                                                $result.$currentProperty += $ValueToSet
                                             }
                                             $currentPropertyIndex++
                                         }
@@ -323,23 +354,32 @@ function Convert-CIMInstanceToPSObject
             # The main token for the CIMInstance
             "Keyword" {
                 $result.Add("CIMInstance", $token.Content)
+                break
             }
             "Member" {
                 $result.Add($token.Content, "")
                 $CurrentMemberName = $token.Content
+                break
             }
-            { $_ -in "String", "Number", "Variable"} {
-                # Get the name of the Member associated with this value;
-                $content = $token.Content
-                if ($content.ToLower() -eq 'true')
+            { $_ -in "String", "Number"} {
+                $result.$CurrentMemberName = $token.Content
+                break
+            }
+            {$_ -in @("Variable")} {
+                # Based on the logic if if it's TRUE or FALSE we keep it as a boolean
+                # if it's other type of variable we keep it as a string with added $ character
+                if ($token.Content.ToLower() -eq 'true')
                 {
-                    $content = $true
+                    $result.$CurrentMemberName = $true
                 }
-                elseif ($content.ToLower() -eq 'false')
+                elseif ($token.Content.ToLower() -eq 'false')
                 {
-                    $content = $false
+                    $result.$CurrentMemberName = $false
                 }
-                $result.$CurrentMemberName = $content
+                else {
+                    $result.$CurrentMemberName = "`$" + $token.Content
+                }
+                break
             }
             {$_ -eq "GroupStart" -and $token.Content -eq '@('} {
                 $result.$CurrentMemberName = @()
@@ -354,13 +394,23 @@ function Convert-CIMInstanceToPSObject
                         $arrayContent = @()
                         do {
                             $content = $CIMInstance[$index].Content
-                            if ($content.ToLower() -eq 'true')
-                            {
-                                $content = $true
-                            }
-                            elseif ($content.ToLower() -eq 'false')
-                            {
-                                $content = $false
+
+                            if ($_ -in @("Variable")) {
+                                # Based on the logic if if it's TRUE or FALSE we keep it as a boolean
+                                # if it's other type of variable we keep it as a string with added $ character
+                                if ($content.ToLower() -eq 'true')
+                                {
+                                    $content = $true
+                                }
+                                elseif ($content.ToLower() -eq 'false')
+                                {
+                                    $content = $false
+                                }
+                                else {
+                                    $content = "`$" + $content
+                                }
+                            } elseif ($_ -in @("String", "Number")) {
+                                $content = $content
                             }
                             $arrayContent += $content
                             $index++
