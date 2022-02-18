@@ -205,6 +205,10 @@ function Get-HashtableFromGroup
                             {
                                 $result.$currentProperty += $false
                             }
+                            elseif ($component.Content.ToLower() -eq 'null')
+                            {
+                                $result.$currentProperty += $null
+                            }
                             else {
                                 $result.$currentProperty += "`$" + $component.Content
                             }
@@ -258,6 +262,10 @@ function Get-HashtableFromGroup
                                                     elseif ($ValueToSet.ToLower() -eq 'false')
                                                     {
                                                         $ValueToSet = $false
+                                                    }
+                                                    elseif ($ValueToSet.ToLower() -eq 'null')
+                                                    {
+                                                        $ValueToSet = $null
                                                     }
                                                     else {
                                                         $ValueToSet = "`$" + $ValueToSet
@@ -376,6 +384,10 @@ function Convert-CIMInstanceToPSObject
                 {
                     $result.$CurrentMemberName = $false
                 }
+                elseif ($token.Content.ToLower() -eq 'null')
+                {
+                    $result.$CurrentMemberName = $null
+                }
                 else {
                     $result.$CurrentMemberName = "`$" + $token.Content
                 }
@@ -405,6 +417,10 @@ function Convert-CIMInstanceToPSObject
                                 elseif ($content.ToLower() -eq 'false')
                                 {
                                     $content = $false
+                                }
+                                elseif ($content.ToLower() -eq 'null')
+                                {
+                                    $content = $null
                                 }
                                 else {
                                     $content = "`$" + $content
