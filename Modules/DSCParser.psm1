@@ -21,14 +21,14 @@
     #endregion
 
     # Define components we wish to filter out
-    $noisyTypesDesktop = @("NewLine", "StatementSeparator", "Command", "CommandArgument", "CommandParameter")
-    $noisyTypesCore = @("NewLine", "StatementSeparator", "CommandArgument", "CommandParameter")
-    if (-not $IncludeComments)
-    {
-        $noisyTypesDesktop += "Comment"
-        $noisyTypesCore += "Comment"
-    }
-    $noisyOperators = (".",",", "")
+    $noisyTypes = @(
+        "StatementSeparator", "CommandArgument", "CommandParameter"
+        if (-not $IncludeComments){
+            "Comment"
+        }
+    )
+
+    $NoisyOperators = (".",",", "")
 
     # Tokenize the file's content to break it down into its various components;
     if (([System.String]::IsNullOrEmpty($Path) -and [System.String]::IsNullOrEmpty($Content)) -or `
@@ -93,7 +93,7 @@
     $ParsedResults = $null
     if ($componentsArray.Count -gt 0)
     {
-        $ParsedResults = Get-HashtableFromGroup -Groups $componentsArray -Path $Path -IncludeComments:$IncludeComments
+        $ParsedResults = Get-HashtableFromGroup -Groups $componentsArray -Path $Path -IncludeComments:$IncludeComments -NoisyOperators $NoisyOperators
     }
     return $ParsedResults
 }
@@ -114,6 +114,8 @@ function Get-HashtableFromGroup
         [Parameter()]
         [System.Boolean]
         $IsSubGroup = $false,
+
+        [Array] $NoisyOperators,
 
         [switch] $IncludeComments
     )
@@ -178,7 +180,7 @@ function Get-HashtableFromGroup
                         $currentPosition++
                     }
                     $currentPropertyIndex = $currentPosition
-                    $subResult = Get-HashtableFromGroup -Groups $allSubGroups -IsSubGroup $true -Path $Path -IncludeComments:$IncludeComments.IsPresent
+                    $subResult = Get-HashtableFromGroup -Groups $allSubGroups -IsSubGroup $true -Path $Path -IncludeComments:$IncludeComments.IsPresent -NoisyOperators $NoisyOperators
                     $allSubGroups = @()
                     $subGroup = @()
                     $result.$currentProperty += $subResult
@@ -195,7 +197,23 @@ function Get-HashtableFromGroup
                             break
                         }
                         {$_ -in @("Variable")} {
-                            $result.$currentProperty += "`$" + $component.Content
+                            # Based on the logic if if it's TRUE or FALSE we keep it as a boolean
+                            # if it's other type of variable we keep it as a string with added $ character
+                            if ($component.Content.ToLower() -eq 'true')
+                            {
+                                $result.$currentProperty += $true
+                            }
+                            elseif ($component.Content.ToLower() -eq 'false')
+                            {
+                                $result.$currentProperty += $false
+                            }
+                            elseif ($component.Content.ToLower() -eq 'null')
+                            {
+                                $result.$currentProperty += $null
+                            }
+                            else {
+                                $result.$currentProperty += "`$" + $component.Content
+                            }
                             break
                         }
                         {$_ -in @("Member")} {
@@ -228,12 +246,35 @@ function Get-HashtableFromGroup
                                 switch ($group[$currentPropertyIndex].Type)
                                 {
                                     # Property is an array of string or integer
-                                    {$_ -in @("String", "Number")} {
+                                    {$_ -in @("String", "Number", "Variable")} {
                                         do
                                         {
+                                            $ValueToSet = $group[$currentPropertyIndex].Content
                                             if ($group[$currentPropertyIndex].Content -notin $noisyOperators)
                                             {
-                                                $result.$currentProperty += $group[$currentPropertyIndex].Content
+                                                $Type = $group[$currentPropertyIndex].Type
+                                                if ($Type -eq "Variable") {
+                                                    # Based on the logic if if it's TRUE or FALSE we keep it as a boolean
+                                                    # if it's other type of variable we keep it as a string with added $ character
+
+                                                    if ($ValueToSet.ToLower() -eq 'true')
+                                                    {
+                                                        $ValueToSet = $true
+                                                    }
+                                                    elseif ($ValueToSet.ToLower() -eq 'false')
+                                                    {
+                                                        $ValueToSet = $false
+                                                    }
+                                                    elseif ($ValueToSet.ToLower() -eq 'null')
+                                                    {
+                                                        $ValueToSet = $null
+                                                    }
+                                                    else {
+                                                        $ValueToSet = "`$" + $ValueToSet
+                                                    }
+                                                }
+
+                                                $result.$currentProperty += $ValueToSet
                                             }
                                             $currentPropertyIndex++
                                         }
@@ -264,7 +305,7 @@ function Get-HashtableFromGroup
                                             $currentPropertyIndex++
                                         }
                                         while ($group[$currentPropertyIndex-1].Type -ne 'GroupEnd' -or $GroupsToClose -ne 0 -or -not $FoundOneGroup)
-                                        $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents
+                                        $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents -NoisyOperators $NoisyOperators
                                         $result.$CurrentProperty += $CimInstanceObject
                                         break
                                     }
@@ -309,7 +350,9 @@ function Convert-CIMInstanceToPSObject
     Param(
         [Parameter(Mandatory = $true)]
         [System.Object[]]
-        $CIMInstance
+        $CIMInstance,
+
+        [Array] $NoisyOperators
     )
 
     $result = [ordered] @{}
@@ -323,23 +366,36 @@ function Convert-CIMInstanceToPSObject
             # The main token for the CIMInstance
             "Keyword" {
                 $result.Add("CIMInstance", $token.Content)
+                break
             }
             "Member" {
                 $result.Add($token.Content, "")
                 $CurrentMemberName = $token.Content
+                break
             }
-            { $_ -in "String", "Number", "Variable"} {
-                # Get the name of the Member associated with this value;
-                $content = $token.Content
-                if ($content.ToLower() -eq 'true')
+            { $_ -in "String", "Number"} {
+                $result.$CurrentMemberName = $token.Content
+                break
+            }
+            {$_ -in @("Variable")} {
+                # Based on the logic if if it's TRUE or FALSE we keep it as a boolean
+                # if it's other type of variable we keep it as a string with added $ character
+                if ($token.Content.ToLower() -eq 'true')
                 {
-                    $content = $true
+                    $result.$CurrentMemberName = $true
                 }
-                elseif ($content.ToLower() -eq 'false')
+                elseif ($token.Content.ToLower() -eq 'false')
                 {
-                    $content = $false
+                    $result.$CurrentMemberName = $false
                 }
-                $result.$CurrentMemberName = $content
+                elseif ($token.Content.ToLower() -eq 'null')
+                {
+                    $result.$CurrentMemberName = $null
+                }
+                else {
+                    $result.$CurrentMemberName = "`$" + $token.Content
+                }
+                break
             }
             {$_ -eq "GroupStart" -and $token.Content -eq '@('} {
                 $result.$CurrentMemberName = @()
@@ -354,13 +410,27 @@ function Convert-CIMInstanceToPSObject
                         $arrayContent = @()
                         do {
                             $content = $CIMInstance[$index].Content
-                            if ($content.ToLower() -eq 'true')
-                            {
-                                $content = $true
-                            }
-                            elseif ($content.ToLower() -eq 'false')
-                            {
-                                $content = $false
+
+                            if ($_ -in @("Variable")) {
+                                # Based on the logic if if it's TRUE or FALSE we keep it as a boolean
+                                # if it's other type of variable we keep it as a string with added $ character
+                                if ($content.ToLower() -eq 'true')
+                                {
+                                    $content = $true
+                                }
+                                elseif ($content.ToLower() -eq 'false')
+                                {
+                                    $content = $false
+                                }
+                                elseif ($content.ToLower() -eq 'null')
+                                {
+                                    $content = $null
+                                }
+                                else {
+                                    $content = "`$" + $content
+                                }
+                            } elseif ($_ -in @("String", "Number")) {
+                                $content = $content
                             }
                             $arrayContent += $content
                             $index++
@@ -393,7 +463,7 @@ function Convert-CIMInstanceToPSObject
                                 $index++
                             }
                             while ($CIMInstance[$index-1].Type -ne 'GroupEnd' -or $GroupsToClose -ne 0 -or -not $FoundOneGroup)
-                            $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents
+                            $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents -NoisyOperators $NoisyOperators
                             $result.$CurrentMemberName += $CimInstanceObject
                             $index++
                         }
