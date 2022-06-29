@@ -28,7 +28,7 @@
         }
     )
 
-    $NoisyOperators = (".",",", "")
+    $NoisyOperators = (",", "")
 
     # Tokenize the file's content to break it down into its various components;
     if (([System.String]::IsNullOrEmpty($Path) -and [System.String]::IsNullOrEmpty($Content)) -or `
@@ -271,6 +271,11 @@ function Get-HashtableFromGroup
                                                     }
                                                     else {
                                                         $ValueToSet = "`$" + $ValueToSet
+                                                        # Supports variable name escape syntax within arrays
+                                                        Do {
+                                                            $currentPropertyIndex++
+                                                            $ValueToSet += $group[$CurrentPropertyIndex].Content
+                                                        } until (($group[$CurrentPropertyIndex + 1].Type -eq 'Operator' -and $group[$CurrentPropertyIndex + 1].Content -eq ',') -or $group[$currentPropertyIndex + 1].Type -eq 'GroupEnd')
                                                     }
                                                 }
 
@@ -327,6 +332,14 @@ function Get-HashtableFromGroup
                             {
                                 $result.Add($currentProperty, $null)
                             }
+                        }
+                        "Variable" {
+                            # This is added to handle advanced variables such as $Test.Nested.Variable on 1st level
+                            $result.$currentProperty += "`$" + $component.Content
+                            Do {
+                                $currentPropertyIndex++
+                                $result.$currentProperty += $group[$CurrentPropertyIndex].Content
+                            } until ($group[$CurrentPropertyIndex + 1].Type -eq 'NewLine')
                         }
                     }
                 }
@@ -394,6 +407,11 @@ function Convert-CIMInstanceToPSObject
                 }
                 else {
                     $result.$CurrentMemberName = "`$" + $token.Content
+                    # Supports variable name escape syntax within ciminstances
+                    Do {
+                        $index++
+                        $result.$CurrentMemberName += $CIMInstance[$index].Content
+                    } until ($CIMInstance[$index + 1].Type -eq 'NewLine')
                 }
                 break
             }
