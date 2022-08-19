@@ -1,17 +1,20 @@
 ﻿function ConvertTo-DSCObject
 {
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = 'Path')]
     param
     (
-        [Parameter()]
+        [Parameter(Mandatory = $true,
+                   ParameterSetName = 'Path')]
         [System.String]
         $Path,
 
-        [Parameter()]
+        [Parameter(Mandatory = $true,
+                   ParameterSetName = 'Content')]
         [System.String]
         $Content,
 
-        [Parameter()]
+        [Parameter(ParameterSetName = 'Path')]
+        [Parameter(ParameterSetName = 'Content')]
         [System.Boolean]
         $IncludeComments = $false
     )
