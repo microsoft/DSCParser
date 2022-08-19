@@ -29,6 +29,8 @@
     )
 
     $NoisyOperators = (",", "")
+    # Define variable for handling parser errors
+    $ParserErrors=$null
 
     # Tokenize the file's content to break it down into its various components;
     if (([System.String]::IsNullOrEmpty($Path) -and [System.String]::IsNullOrEmpty($Content)) -or `
@@ -38,11 +40,33 @@
     }
     elseif (![System.String]::IsNullOrEmpty($Path))
     {
-        $parsedData = [System.Management.Automation.PSParser]::Tokenize((Get-Content $Path), [ref]$null)
+        $parsedData = [System.Management.Automation.PSParser]::Tokenize((Get-Content $Path), [ref]$ParserErrors)
     }
     elseif (![System.String]::IsNullOrEmpty($Content))
     {
-        $parsedData = [System.Management.Automation.PSParser]::Tokenize($Content, [ref]$null)
+        $parsedData = [System.Management.Automation.PSParser]::Tokenize($Content, [ref]$ParserErrors)
+    }
+
+    # Handle parser errors
+    if ($null -ne $ParserErrors -and $ParserErrors.Count -gt 0) {
+        ForEach ($ParserError in $ParserErrors) {
+            switch ($ParserError.Message) {
+                {$_ -like 'Could not find the module *' -or `
+                 $_ -like 'Multiple versions of the module ''*'' were found*'} {
+                    Throw ('ConvertTo-DSCObject: "{0}" (line {1}): {2}' -f $ParserError.Token.Content, $ParserError.Token.StartLine, $ParserError.Message)
+                    break
+                }
+                {$_ -like 'The member ''*'' is not valid*' -or `
+                 $_ -like 'Resource ''*'' requires that a value of type ''*'' be provided for property ''*''.'} {
+                    Write-Warning ('ConvertTo-DSCObject: "{0}" (line {1}): {2}' -f $ParserError.Token.Content, $ParserError.Token.StartLine, $ParserError.Message)
+                    break
+                }
+                default {
+                    # unhandled/unknown error. Not sure whether the .token object contains useful content, assuming it does
+                    Throw ('ConvertTo-DSCObject: "{0}" (line {1}): {2}' -f $ParserError.Token.Content, $ParserError.Token.StartLine, $ParserError.Message)
+                }
+            }
+        }
     }
 
     [array]$componentsArray = @()
