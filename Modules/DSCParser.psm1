@@ -5,6 +5,15 @@
     (
         [Parameter(Mandatory = $true,
                    ParameterSetName = 'Path')]
+        [ValidateScript({
+            if(-Not ($_ | Test-Path) ){
+                throw "File or folder does not exist"
+            }
+            if(-Not ($_ | Test-Path -PathType Leaf) ){
+                throw "The Path argument must be a file. Folder paths are not allowed."
+            }
+            return $true
+        })]
         [System.String]
         $Path,
 
@@ -36,18 +45,13 @@
     $ParserErrors=$null
 
     # Tokenize the file's content to break it down into its various components;
-    if (([System.String]::IsNullOrEmpty($Path) -and [System.String]::IsNullOrEmpty($Content)) -or `
-        (![System.String]::IsNullOrEmpty($Path) -and ![System.String]::IsNullOrEmpty($Content)))
-    {
-        throw "You need to specify either Path or Content as parameters."
-    }
-    elseif (![System.String]::IsNullOrEmpty($Path))
-    {
-        $parsedData = [System.Management.Automation.PSParser]::Tokenize((Get-Content $Path), [ref]$ParserErrors)
-    }
-    elseif (![System.String]::IsNullOrEmpty($Content))
-    {
-        $parsedData = [System.Management.Automation.PSParser]::Tokenize($Content, [ref]$ParserErrors)
+    switch ($PsCmdlet.ParameterSetName) {
+        'Path' {
+            $parsedData = [System.Management.Automation.PSParser]::Tokenize((Get-Content $Path), [ref]$ParserErrors)
+        }
+        'Content' {
+            $parsedData = [System.Management.Automation.PSParser]::Tokenize($Content, [ref]$ParserErrors)
+        }
     }
 
     # Handle parser errors
