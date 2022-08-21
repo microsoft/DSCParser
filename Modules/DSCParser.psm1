@@ -59,17 +59,13 @@
             switch ($ParserError.Message) {
                 { $_ -like 'Could not find the module *' -or `
                         $_ -like 'Multiple versions of the module ''*'' were found*' } {
+                    # The corresponding DSC object cannot be found because of a missing or duplicate module. Throw a terminating error
                     Throw ('ConvertTo-DSCObject: "{0}" (line {1}): {2}' -f $ParserError.Token.Content, $ParserError.Token.StartLine, $ParserError.Message)
-                    break
-                }
-                { $_ -like 'The member ''*'' is not valid*' -or `
-                        $_ -like 'Resource ''*'' requires that a value of type ''*'' be provided for property ''*''.' } {
-                    Write-Warning ('ConvertTo-DSCObject: "{0}" (line {1}): {2}' -f $ParserError.Token.Content, $ParserError.Token.StartLine, $ParserError.Message)
                     break
                 }
                 default {
                     # unhandled/unknown error. Not sure whether the .token object contains useful content, assuming it does
-                    Throw ('ConvertTo-DSCObject: "{0}" (line {1}): {2}' -f $ParserError.Token.Content, $ParserError.Token.StartLine, $ParserError.Message)
+                    Write-Warning ('ConvertTo-DSCObject: "{0}" (line {1}): {2}' -f $ParserError.Token.Content, $ParserError.Token.StartLine, $ParserError.Message)
                 }
             }
         }
