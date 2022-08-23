@@ -192,8 +192,26 @@ function Get-HashtableFromGroup
                 {
                     switch ($component.Type)
                     {
-                        {$_ -in @("String","Number")} {
+                        { $_ -in @("String") } {
                             $result.$currentProperty += $component.Content
+                            break
+                        }
+                        { $_ -in @("Number") } {
+                            $CultureEnUS=[System.Globalization.CultureInfo]::new('en-us')
+                            try {
+                                # AST already determined that this is a number. For added safety, we're doing this in a try/catch block
+                                $ContentAsDecimal=[System.Decimal]$Component.Content
+                            }
+                            catch {
+                                $ContentAsDecimal=$null
+                            }
+                            if ($null -ne $ContentAsDecimal -and $ContentAsDecimal.ToString('',$CultureEnUS) -eq $Component.Content) {
+                                # The content converted from decimal back to string matches the original string content, so we can safely return the decimal object
+                                $result.$currentProperty += $ContentAsDecimal
+                            } Else {
+                                # For some reason, the content converted from decimal back to string does not match the original content. Return the original (string) content
+                                $result.$currentProperty += $component.Content
+                            }
                             break
                         }
                         {$_ -in @("Variable")} {
