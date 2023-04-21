@@ -33,7 +33,7 @@
 
     # Define components we wish to filter out
     $noisyTypes = @(
-        "StatementSeparator", "CommandArgument", "CommandParameter"
+        "StatementSeparator", "CommandParameter"
         if (-not $IncludeComments) {
             "Comment"
         }
@@ -65,7 +65,10 @@
                 }
                 default {
                     # unhandled/unknown error. Not sure whether the .token object contains useful content, assuming it does
-                    Write-Warning ('ConvertTo-DSCObject: "{0}" (line {1}): {2}' -f $ParserError.Token.Content, $ParserError.Token.StartLine, $ParserError.Message)
+                    if ($ParserError.Token.Content -ne ".\ConfigurationData.psd1")
+                    {
+                        Write-Warning ('ConvertTo-DSCObject: "{0}" (line {1}): {2}' -f $ParserError.Token.Content, $ParserError.Token.StartLine, $ParserError.Message)
+                    }
                 }
             }
         }
@@ -75,29 +78,41 @@
     $currentValues = @()
     $nodeKeyWordEncountered = $false
     $ObjectsToClose = 0
-    for ($i = 0; $i -lt $parsedData.Count; $i++) {
-        if ($nodeKeyWordEncountered) {
-            if ($parsedData[$i].Type -eq "GroupStart" -or $parsedData[$i].Content -eq '{') {
+    for ($i = 0; $i -lt $parsedData.Count; $i++)
+    {
+        if ($nodeKeyWordEncountered)
+        {
+            if ($parsedData[$i].Type -eq "GroupStart" -or $parsedData[$i].Content -eq '{')
+            {
                 $ObjectsToClose++
-            } elseif (($parsedData[$i].Type -eq "GroupEnd" -or $parsedData[$i].Content -eq '}') -and $ObjectsToClose -gt 0) {
+            }
+            elseif (($parsedData[$i].Type -eq "GroupEnd" -or $parsedData[$i].Content -eq '}') -and $ObjectsToClose -gt 0)
+            {
                 $ObjectsToClose--
             }
 
-            if ($parsedData[$i].Type -notin $noisyTypes -and $parsedData[$i].Content -notin $noisyParts) {
+            if ($parsedData[$i].Type -notin $noisyTypes -and $parsedData[$i].Content -notin $noisyParts)
+            {
                 $currentValues += $parsedData[$i]
-                if ($parsedData[$i].Type -eq "GroupEnd" -and $parsedData[$i].Content -eq '}' -and $ObjectsToClose -eq 0) {
+                if ($parsedData[$i].Type -eq "GroupEnd" -and $parsedData[$i].Content -eq '}' -and $ObjectsToClose -eq 0)
+                {
                     $componentsArray += , $currentValues
                     $currentValues = @()
-                    $ObjectsToClose = 0
+                    $ObjectsToClose = 0                    
                 }
-            } elseif (($parsedData[$i].Type -eq "GroupEnd" -and $parsedData[$i - 2].Content -ne 'parameter' -and $parsedData[$i].Content -ne '}') -or
-                ($parsedData[$i].Type -eq "GroupStart" -and $parsedData[$i - 1].Content -ne 'parameter' -and $parsedData[$i].Content -ne '{')) {
+            }
+            elseif (($parsedData[$i].Type -eq "GroupEnd" -and $parsedData[$i - 2].Content -ne 'parameter' -and $parsedData[$i].Content -ne '}') -or
+                ($parsedData[$i].Type -eq "GroupStart" -and $parsedData[$i - 1].Content -ne 'parameter' -and $parsedData[$i].Content -ne '{'))
+            {
                 $currentValues += $parsedData[$i]
             }
-        } elseif ($parsedData[$i].Content -eq 'node') {
+        } 
+        elseif ($parsedData[$i].Content -eq 'node')
+        {
             $nodeKeyWordEncountered = $true
             $newIndexPosition = $i + 1
-            while ($parsedData[$newIndexPosition].Type -ne 'Keyword' -and $i -lt $parsedData.Count) {
+            while ($parsedData[$newIndexPosition].Type -ne 'Keyword' -and $i -lt $parsedData.Count)
+            {
                 $i++
                 $newIndexPosition = $i + 1
             }
@@ -105,7 +120,8 @@
     }
 
     $ParsedResults = $null
-    if ($componentsArray.Count -gt 0) {
+    if ($componentsArray.Count -gt 0)
+    {
         $ParsedResults = Get-HashtableFromGroup -Groups $componentsArray -Path $Path -IncludeComments:$IncludeComments -NoisyOperators $NoisyOperators
     }
     return $ParsedResults
@@ -113,7 +129,7 @@
 
 function Get-HashtableFromGroup {
     [CmdletBinding()]
-    [OutputType([System.Collections.IDictionary])]
+    [OutputType([System.Collections.IDictionary[]])]
     param(
         [Parameter(Mandatory = $true)]
         [System.Array]
@@ -134,7 +150,7 @@ function Get-HashtableFromGroup {
 
     # Loop through all the Resources identified within our configuration
     $currentIndex = 1
-    $result = @()
+    $result = [ordered] @{}
     $ParsedResults = @()
     foreach ($group in $Groups) {
         $keywordFound = $false
@@ -145,10 +161,19 @@ function Get-HashtableFromGroup {
         $currentProperty = ''
         while ($currentPropertyIndex -lt $group.Count) {
             $component = $group[$currentPropertyIndex]
-            if ($component.Type -eq "Keyword" -and -not $keywordFound) {
+            if ($component.Type -eq "Keyword" -and -not $keywordFound)
+            {
                 $result = [ordered] @{ ResourceName = $component.Content }
                 $keywordFound = $true
-            } elseif ($keywordFound) {
+
+                # Check to see this is not a CIMInstance (where the next entry is '{')
+                if ($group[$currentPropertyIndex + 1].Content -ne '{')
+                {
+                    $currentPropertyIndex++
+                    $result.Add('ResourceInstanceName', $group[$currentPropertyIndex].Content)
+                }
+            }
+            elseif ($keywordFound) {
                 # If the next component is a keyword and we've already identified a keyword for this group, that means that we are
                 # looking at a CIMInstance property;
                 if ($component.Type -eq "Keyword") {
@@ -180,6 +205,8 @@ function Get-HashtableFromGroup {
                     }
                     $currentPropertyIndex = $currentPosition
                     $subResult = Get-HashtableFromGroup -Groups $allSubGroups -IsSubGroup $true -Path $Path -IncludeComments:$IncludeComments.IsPresent -NoisyOperators $NoisyOperators
+                    $subResult[0].Add("CIMInstance", $subResult.ResourceName)
+                    $subResult[0].Remove("ResourceName") | Out-Null
                     $allSubGroups = @()
                     $subGroup = @()
                     $result.$currentProperty += $subResult
@@ -346,7 +373,10 @@ function Convert-CIMInstanceToPSObject {
         switch ($token.Type) {
             # The main token for the CIMInstance
             "Keyword" {
-                $result.Add("CIMInstance", $token.Content)
+                if (-not $result.Contains('CIMInstance'))
+                {
+                    $result.Add("CIMInstance", $token.Content)
+                }
                 break
             }
             "Member" {
