@@ -380,7 +380,10 @@ function Convert-CIMInstanceToPSObject {
                 break
             }
             "Member" {
-                $result.Add($token.Content, "")
+                if (-not $result.Contains($token.Content))
+                {
+                    $result.Add($token.Content, "")
+                }
                 $CurrentMemberName = $token.Content
                 break
             }
