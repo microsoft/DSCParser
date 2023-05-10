@@ -469,6 +469,29 @@ function Convert-CIMInstanceToPSObject {
                     }
                 }
             }
+            { $_ -eq "GroupStart" -and $token.Content -eq '{' } {
+                if (-not [System.String]::IsNullOrEmpty($CurrentMemberName))
+                {
+                    $subCim = @()
+                    $openedGroups = 0
+                    $index++
+                    while ($CimInstance[$index].Type -ne 'GroupEnd' -and $openedGroups -le 0)
+                    {
+                        $subCim += $CimInstance[$index]
+                        $index++
+                        if ($CimInstance[$index].Type -eq 'GroupStart')
+                        {
+                            $openedGroups++
+                        }
+                        elseif ($CimInstance[$index].Type -eq 'GroupEnd')
+                        {
+                            $openedGroups --
+                        }
+                    }
+
+                    $result.$CurrentMemberName = Convert-CIMInstanceToPSObject -CIMInstance $subCim -NoisyOperators $NoisyOperators
+                }
+            }
         }
         $index++
     }
