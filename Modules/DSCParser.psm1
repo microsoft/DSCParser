@@ -498,3 +498,124 @@ function Convert-CIMInstanceToPSObject {
     }
     return $result
 }
+
+function ConvertFrom-DSCObject
+{
+    [CmdletBinding()]
+    [OutputType([System.String])]
+
+    Param(
+        [parameter(Mandatory = $true)]
+        [System.Collections.Hashtable[]]
+        $DSCResources,
+
+        [parameter(Mandatory = $false)]
+        [System.Int32]
+        $ChildLevel = 0
+    )
+
+    $results = [System.Text.StringBuilder]::New()
+    $ParametersToSkip = @('ResourceInstanceName', 'ResourceName', 'CIMInstance')
+    $childSpacer = ""
+    for ($i = 0; $i -lt $ChildLevel; $i++)
+    {
+        $childSpacer += "    "
+    }
+    foreach ($entry in $DSCResources)
+    {
+        $longuestParameter = [int]($entry.Keys | Measure-Object -Maximum -Property Length).Maximum
+
+        if ($entry.'CIMInstance')
+        {
+            [void]$results.AppendLine($childSpacer + $entry.CIMInstance)
+        }
+        else
+        {
+            [void]$results.AppendLine($childSpacer + $entry.ResourceName + " `"$($entry.ResourceInstanceName)`"")
+        }
+
+        [void]$results.AppendLine("$childSpacer{")
+        foreach ($property in $entry.Keys)
+        {
+            if ($property -notin $ParametersToSkip)
+            {
+                $additionalSpaces = " "
+                for ($i = $property.Length; $i -lt $longuestParameter; $i++)
+                {
+                    $additionalSpaces += " "
+                }
+
+                if ($property -eq 'Credential')
+                {
+                    [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= $($entry.$property)")
+                }
+                else
+                {
+                    switch($entry.$property.GetType().Name)
+                    {
+                        "String"
+                        {
+                            [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= `"$($entry.$property.Replace('"', '`"'))`"")
+                        }
+                        "Int32"
+                        {
+                            [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= $($entry.$property)")
+                        }
+                        "Boolean"
+                        {
+                            [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= `$$($entry.$property)")
+                        }
+                        "Object[]"
+                        {
+                            if ($entry.$property.Length -gt 0)
+                            {
+                                $objectToTest = $entry.$property
+                                if ($null -ne $objectToTest -and $objectToTest.Keys.Length -gt 0)
+                                {
+                                    if ($objectToTest.'CIMInstance')
+                                    {
+                                        $subResult = ConvertFrom-DSCObject -DSCResources $entry.$property -ChildLevel ($ChildLevel + 2)
+                                        [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= @(")
+                                        [void]$results.AppendLine("$subResult")
+                                        [void]$results.AppendLine("$childSpacer    )")
+                                    }
+                                }
+                                else
+                                {
+                                    switch($entry.$property[0].GetType().Name)
+                                    {
+                                        "String"
+                                        {
+                                            [void]$results.Append("$childSpacer    $property$additionalSpaces= @(")
+                                            $tempArrayContent = ""
+                                            foreach ($item in $entry.$property)
+                                            {
+                                                $tempArrayContent += "`"$($item.Replace('"', '`"'))`","
+                                            }
+                                            $tempArrayContent = $tempArrayContent.Remove($tempArrayContent.Length-1, 1)
+                                            [void]$results.Append($tempArrayContent + ")`r`n")
+                                        }
+                                        "Int32"
+                                        {
+                                            [void]$results.Append("$childSpacer    $property$additionalSpaces= @(")
+                                            $tempArrayContent = ""
+                                            foreach ($item in $entry.$property)
+                                            {
+                                                $tempArrayContent += "$item,"
+                                            }
+                                            $tempArrayContent = $tempArrayContent.Remove($tempArrayContent.Length-1, 1)
+                                            [void]$results.Append($tempArrayContent + ")`r`n")
+                                        }
+                                    }
+                                }
+                             }
+                        }
+                    }
+                }
+            }
+        }
+        [void]$results.AppendLine("$childSpacer}")
+    }
+
+    return $results.ToString()
+}
