@@ -552,7 +552,7 @@ function ConvertFrom-DSCObject
                 }
                 else
                 {
-                    switch($entry.$property.GetType().Name)
+                    switch -regex ($entry.$property.GetType().Name)
                     {
                         "String"
                         {
@@ -573,7 +573,7 @@ function ConvertFrom-DSCObject
                         {
                             [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= `$$($entry.$property)")
                         }
-                        "Object[]"
+                        "Object\[\]|OrderedDictionary"
                         {
                             if ($entry.$property.Length -gt 0)
                             {
