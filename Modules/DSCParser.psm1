@@ -527,14 +527,15 @@ function ConvertFrom-DSCObject
 
         if ($entry.'CIMInstance')
         {
-            [void]$results.AppendLine($childSpacer + $entry.CIMInstance)
+            [void]$results.AppendLine($childSpacer + $entry.CIMInstance + "{")
         }
         else
         {
             [void]$results.AppendLine($childSpacer + $entry.ResourceName + " `"$($entry.ResourceInstanceName)`"")
+            [void]$results.AppendLine("$childSpacer{")
         }
 
-        [void]$results.AppendLine("$childSpacer{")
+        $entry.Keys = $entry.Keys | Sort-Object
         foreach ($property in $entry.Keys)
         {
             if ($property -notin $ParametersToSkip)
