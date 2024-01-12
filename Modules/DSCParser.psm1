@@ -556,7 +556,14 @@ function ConvertFrom-DSCObject
                     {
                         "String"
                         {
-                            [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= `"$($entry.$property.Replace('"', '`"'))`"")
+                            if ($entry.$property[0] -ne "$")
+                            {
+                                [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= `"$($entry.$property.Replace('"', '`"'))`"")
+                            }
+                            else
+                            {
+                                [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= $($entry.$property.Replace('"', '`"'))")
+                            }
                         }
                         "Int32"
                         {
