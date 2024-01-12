@@ -575,10 +575,22 @@ function ConvertFrom-DSCObject
                                 {
                                     if ($objectToTest.'CIMInstance')
                                     {
-                                        $subResult = ConvertFrom-DSCObject -DSCResources $entry.$property -ChildLevel ($ChildLevel + 2)
-                                        [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= @(")
-                                        [void]$results.AppendLine("$subResult")
-                                        [void]$results.AppendLine("$childSpacer    )")
+                                        if ($entry.$property.Length -gt 1)
+                                        {
+                                            $subResult = ConvertFrom-DSCObject -DSCResources $entry.$property -ChildLevel ($ChildLevel + 2)
+                                            # Remove carriage return from last line
+                                            $subResult = $subResult.Substring(0, $subResult.Length - 1)
+                                            [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= @(")
+                                            [void]$results.AppendLine("$subResult")
+                                            [void]$results.AppendLine("$childSpacer    )")
+                                        }
+                                        else
+                                        {
+                                            $subResult = ConvertFrom-DSCObject -DSCResources $entry.$property -ChildLevel ($ChildLevel + 1)
+                                            # Remove carriage return from last line and trim empty spaces before equal sign
+                                            $subResult = $subResult.Substring(0, $subResult.Length - 1).Trim()
+                                            [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= $subResult")
+                                        }
                                     }
                                 }
                                 else
