@@ -473,13 +473,13 @@ function Convert-CIMInstanceToPSObject {
                 if (-not [System.String]::IsNullOrEmpty($CurrentMemberName))
                 {
                     $subCim = @()
-                    $subCim += $CimInstance[--$index]
-                    $openedGroups = 0
-                    $index++
-                    while ($CimInstance[$index].Type -ne 'GroupEnd' -and $openedGroups -le 0)
+                    $subCim += $CimInstance[$index-1]
+                    $subCim += $CimInstance[$index]
+                    $openedGroups = 1
+                    while ($openedGroups -gt 0)
                     {
-                        $subCim += $CimInstance[$index]
                         $index++
+                        $subCim += $CimInstance[$index]
                         if ($CimInstance[$index].Type -eq 'GroupStart')
                         {
                             $openedGroups++
