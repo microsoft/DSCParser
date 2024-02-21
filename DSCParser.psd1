@@ -12,7 +12,7 @@
 # RootModule = ''
 
 # Version number of this module.
-ModuleVersion = '1.4.0.2'
+ModuleVersion = '1.4.0.3'
 
 # ID used to uniquely identify this module
 GUID = 'e168239a-233d-468d-9025-d6dfc0e4e2b6'
@@ -24,7 +24,7 @@ Author = 'Microsoft Corporation'
 CompanyName = 'Microsoft Corporation'
 
 # Copyright statement for this module
-Copyright = '(c) 2018-2023 Microsoft Corporation. All rights reserved.'
+Copyright = '(c) 2018-2024 Microsoft Corporation. All rights reserved.'
 
 # Description of the functionality provided by this module
 Description = 'This module allows for the parsing of a DSC Configuration script into PSObject for analysis'
@@ -63,11 +63,11 @@ PowerShellVersion = '4.0'
 # FormatsToProcess = @()
 
 # Modules to import as nested modules of the module specified in RootModule/ModuleToProcess
-NestedModules = @("modules\DSCParser.psm1")
+NestedModules = @('modules/DSCParser.psm1')
 
 # Functions to export from this module
-FunctionsToExport = @("ConvertTo-DSCObject",
-                      "ConvertFrom-DSCObject")
+FunctionsToExport = @('ConvertTo-DSCObject',
+                      'ConvertFrom-DSCObject')
 
 # Cmdlets to export from this module
 CmdletsToExport = @()
@@ -96,7 +96,7 @@ PrivateData = @{
     PSData = @{
 
         # Tags applied to this module. These help with module discovery in online galleries.
-        Tags = @('DesiredStateConfiguration', 'DSC')
+        Tags = 'DesiredStateConfiguration', 'DSC'
 
         # A URL to the license for this module.
         LicenseUri = 'https://github.com/Microsoft/DSCParser/blob/master/LICENSE'
@@ -108,7 +108,7 @@ PrivateData = @{
         IconUri = 'https://github.com/Microsoft/DSCParser/blob/master/Images/DSCParser.png?raw=true'
 
         # ReleaseNotes of this module
-        ReleaseNotes = "Fixed issue with nested CIMInstances"
+        ReleaseNotes ='"Fixed issue with nested CIMInstances'
     } # End of PSData hashtable
 
 } # End of PrivateData hashtable
