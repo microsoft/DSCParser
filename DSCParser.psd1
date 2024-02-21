@@ -12,7 +12,7 @@
 # RootModule = ''
 
 # Version number of this module.
-ModuleVersion = '1.4.0.3'
+ModuleVersion = '1.4.0.4'
 
 # ID used to uniquely identify this module
 GUID = 'e168239a-233d-468d-9025-d6dfc0e4e2b6'
@@ -30,7 +30,7 @@ Copyright = '(c) 2018-2024 Microsoft Corporation. All rights reserved.'
 Description = 'This module allows for the parsing of a DSC Configuration script into PSObject for analysis'
 
 # Minimum version of the Windows PowerShell engine required by this module
-PowerShellVersion = '4.0'
+PowerShellVersion = '5.1'
 
 # Name of the Windows PowerShell host required by this module
 # PowerShellHostName = ''
@@ -63,7 +63,7 @@ PowerShellVersion = '4.0'
 # FormatsToProcess = @()
 
 # Modules to import as nested modules of the module specified in RootModule/ModuleToProcess
-NestedModules = @('modules/DSCParser.psm1')
+NestedModules = @('Modules/DSCParser.psm1')
 
 # Functions to export from this module
 FunctionsToExport = @('ConvertTo-DSCObject',
@@ -108,7 +108,7 @@ PrivateData = @{
         IconUri = 'https://github.com/Microsoft/DSCParser/blob/master/Images/DSCParser.png?raw=true'
 
         # ReleaseNotes of this module
-        ReleaseNotes ='"Fixed issue with nested CIMInstances'
+        ReleaseNotes ='Fixed issue with nested CIMInstances'
     } # End of PSData hashtable
 
 } # End of PrivateData hashtable
