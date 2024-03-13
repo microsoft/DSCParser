@@ -1,5 +1,151 @@
-﻿function ConvertTo-DSCObject {
+﻿function Update-DSCResultWithMetadata
+{
+    [CmdletBinding()]
+    [OutputType([Array])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [Array]
+        $Tokens,
+
+        [Parameter(Mandatory = $true)]
+        [Array]
+        $ParsedObject
+    )
+    # Find the location of the Node token. This is to ensure
+    # we only look at comments that come after.
+    $i = 0
+    do
+    {
+        $i++
+    } while (($tokens[$i].Kind -ne 'DynamicKeyword' -and $tokens[$i].Extent -ne 'Node') -and $i -le $tokens.Length)
+    $tokenPositionOfNode = $i
+
+    for ($i = $tokenPositionOfNode; $i -le $tokens.Length; $i++)
+    {
+        $percent = ($i / ($tokens.Length - $tokenPositionOfNode) * 100)
+        Write-Progress -Status "Processing $percent%" `
+                       -Activity "Parsing Comments" `
+                       -PercentComplete $percent
+        if ($tokens[$i].Kind -eq 'Comment')
+        {
+            # Found a comment. Backtrack to find what resource it is part of.
+            $stepback = 1
+            do
+            {
+                $stepback++
+            } while ($tokens[$i-$stepback].Kind -ne 'DynamicKeyword')
+
+            $commentResourceType         = $tokens[$i-$stepback].Text
+            $commentResourceInstanceName = $tokens[$i-$stepback + 1].Value
+
+            # Backtrack to find what property it is associated with.
+            $stepback = 1
+            do
+            {
+                $stepback++
+            } while ($tokens[$i-$stepback].Kind -ne 'Identifier')
+            $commentAssociatedProperty = $tokens[$i-$stepback].Text
+
+            # Loop through all instances in the ParsedObject to retrieve
+            # the one associated with the comment.
+            for ($j = 0; $j -le $ParsedObject.Length; $j++)
+            {
+                if ($ParsedObject[$j].ResourceName -eq $commentResourceType -and `
+                    $ParsedObject[$j].ResourceInstanceName -eq $commentResourceInstanceName -and `
+                    $ParsedObject[$j].Keys.Contains($commentAssociatedProperty))
+                {
+                    $ParsedObject[$j].Add("_metadata_$commentAssociatedProperty", $tokens[$i].Text)
+                }
+            }
+        }
+    }
+    Write-Progress -Completed `
+                   -Activity "Parsing Comments"
+    return $ParsedObject
+}
+
+function ConvertFrom-CIMInstanceToHashtable
+{
+    [CMdletBinding()]
+    [OutputType([system.Collections.Hashtable])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Object]
+        $ChildObject
+    )
+    # Case we have an array of CIMInstances
+    if ($ChildObject.GetType().Name -eq 'PipelineAst')
+    {
+        $result = @()
+        $statements = $ChildObject.PipelineElements.Expression.SubExpression.Statements
+        foreach ($statement in $statements)
+        {
+            $result += ConvertFrom-CIMInstanceToHashtable -ChildObject $statement
+        }
+    }
+    else
+    {
+        $result = @{}
+        $KeyPairs = $ChildObject.CommandElements[2].KeyValuePairs
+        $CIMInstanceName = $ChildObject.CommandElements[0].Value
+        $result.Add("CIMInstanceName", $CIMInstanceName)
+        foreach ($entry in $keyPairs)
+        {
+            if ($null -ne $entry.Item2.PipelineElements)
+            {
+                $staticType = $entry.Item2.PipelineElements.Expression.StaticType.ToString()
+                $subExpression = $entry.Item2.PipelineElements.Expression.SubExpression
+
+                if ([System.String]::IsNullOrEmpty($subExpression))
+                {
+                    if ([System.String]::IsNullOrEmpty($entry.Item2.PipelineElements.Expression.Value))
+                    {
+                        $subExpression = $entry.Item2.PipelineElements.Expression.ToString()
+                    }
+                    else
+                    {
+                        $subExpression = $entry.Item2.PipelineElements.Expression.Value
+                    }
+                }
+            }
+            elseif ($null -ne $entry.Item2.CommandElements)
+            {
+                $staticType    = $entry.Item2.CommandElements[2].StaticType.ToString()
+                $subExpression = $entry.Item2.CommandElements[0].Value
+            }
+
+            # Case where the item is an array of Sub-CIMInstances.
+            if ($staticType -eq 'System.Object[]' -and `
+                $subExpression.ToString().StartsWith('MSFT_'))
+            {
+                $subResult = @()
+                foreach ($subItem in $subExpression)
+                {
+                    $subResult += ConvertFrom-CIMInstanceToHashtable -ChildObject $subItem.Statements
+                }
+                $result.Add($entry.Item1.ToString(), $subResult)
+            }
+            # Case the item is a single CIMInstance.
+            elseif ($staticType -eq 'System.Collections.Hashtable' -and `
+                $subExpression.ToString().StartsWith('MSFT_'))
+            {
+                $subResult = ConvertFrom-CIMInstanceToHashtable -ChildObject $entry.Item2
+                $result.Add($entry.Item1.ToString(), $subResult)
+            }
+            else
+            {
+                $result.Add($entry.Item1.ToString(), $subExpression)
+            }
+        }
+    }
+
+    return $result
+}
+
+function ConvertTo-DSCObject
+{
     [CmdletBinding(DefaultParameterSetName = 'Path')]
+    [OutputType([Array])]
     param
     (
         [Parameter(Mandatory = $true,
@@ -26,477 +172,134 @@
         [System.Boolean]
         $IncludeComments = $false
     )
+    $result = @()
+    $Tokens      = $null
+    $ParseErrors = $null
 
-    #region Variables
-    $ParsedResults = @()
-    #endregion
+    # Retrieve information about the resources in the Microsoft365DSC
+    # Module for schema and property type validation.
+    $DSCResources = Get-DSCResource -Module 'Microsoft365DSC'
 
-    # Define components we wish to filter out
-    $noisyTypes = @(
-        "StatementSeparator", "CommandParameter"
-        if (-not $IncludeComments) {
-            "Comment"
-        }
-    )
-
-    $NoisyOperators = (",", "")
-    # Define variable for handling parser errors
-    $ParserErrors = $null
-
-    # Tokenize the file's content to break it down into its various components;
-    switch ($PsCmdlet.ParameterSetName) {
-        'Path' {
-            $parsedData = [System.Management.Automation.PSParser]::Tokenize((Get-Content $Path), [ref]$ParserErrors)
-        }
-        'Content' {
-            $parsedData = [System.Management.Automation.PSParser]::Tokenize($Content, [ref]$ParserErrors)
-        }
-    }
-
-    # Handle parser errors
-    if ($null -ne $ParserErrors -and $ParserErrors.Count -gt 0) {
-        ForEach ($ParserError in $ParserErrors) {
-            switch ($ParserError.Message) {
-                { $_ -like 'Could not find the module *' -or `
-                        $_ -like 'Multiple versions of the module ''*'' were found*' } {
-                    # The corresponding DSC object cannot be found because of a missing or duplicate module. Throw a terminating error
-                    Throw ('ConvertTo-DSCObject: "{0}" (line {1}): {2}' -f $ParserError.Token.Content, $ParserError.Token.StartLine, $ParserError.Message)
-                    break
-                }
-                default {
-                    # unhandled/unknown error. Not sure whether the .token object contains useful content, assuming it does
-                    if ($ParserError.Token.Content -ne ".\ConfigurationData.psd1")
-                    {
-                        Write-Warning ('ConvertTo-DSCObject: "{0}" (line {1}): {2}' -f $ParserError.Token.Content, $ParserError.Token.StartLine, $ParserError.Message)
-                    }
-                }
-            }
-        }
-    }
-
-    [array]$componentsArray = @()
-    $currentValues = @()
-    $nodeKeyWordEncountered = $false
-    $ObjectsToClose = 0
-    for ($i = 0; $i -lt $parsedData.Count; $i++)
+    # Use the AST to parse the DSC configuration
+    if (-not [System.String]::IsNullOrEmpty($Path))
     {
-        if ($nodeKeyWordEncountered)
-        {
-            if ($parsedData[$i].Type -eq "GroupStart" -or $parsedData[$i].Content -eq '{')
-            {
-                $ObjectsToClose++
-            }
-            elseif (($parsedData[$i].Type -eq "GroupEnd" -or $parsedData[$i].Content -eq '}') -and $ObjectsToClose -gt 0)
-            {
-                $ObjectsToClose--
-            }
-
-            if ($parsedData[$i].Type -notin $noisyTypes -and $parsedData[$i].Content -notin $noisyParts)
-            {
-                $currentValues += $parsedData[$i]
-                if ($parsedData[$i].Type -eq "GroupEnd" -and $parsedData[$i].Content -eq '}' -and $ObjectsToClose -eq 0)
-                {
-                    $componentsArray += , $currentValues
-                    $currentValues = @()
-                    $ObjectsToClose = 0                    
-                }
-            }
-            elseif (($parsedData[$i].Type -eq "GroupEnd" -and $parsedData[$i - 2].Content -ne 'parameter' -and $parsedData[$i].Content -ne '}') -or
-                ($parsedData[$i].Type -eq "GroupStart" -and $parsedData[$i - 1].Content -ne 'parameter' -and $parsedData[$i].Content -ne '{'))
-            {
-                $currentValues += $parsedData[$i]
-            }
-        } 
-        elseif ($parsedData[$i].Content -eq 'node')
-        {
-            $nodeKeyWordEncountered = $true
-            $newIndexPosition = $i + 1
-            while ($parsedData[$newIndexPosition].Type -ne 'Keyword' -and $i -lt $parsedData.Count)
-            {
-                $i++
-                $newIndexPosition = $i + 1
-            }
-        }
+        $AST = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $Path), [ref]$Tokens, [ref]$ParseErrors)
     }
-
-    $ParsedResults = $null
-    if ($componentsArray.Count -gt 0)
+    else
     {
-        $ParsedResults = Get-HashtableFromGroup -Groups $componentsArray -Path $Path -IncludeComments:$IncludeComments -NoisyOperators $NoisyOperators
+        $AST = [System.Management.Automation.Language.Parser]::ParseInput($Content, [ref]$Tokens, [ref]$ParseErrors)
     }
-    return $ParsedResults
-}
+    # Look up the Configuration definition ("")
+    $Config = $AST.Find({$Args[0].GetType().Name -eq 'ConfigurationDefinitionAst'}, $False)
 
-function Get-HashtableFromGroup {
-    [CmdletBinding()]
-    [OutputType([System.Collections.IDictionary[]])]
-    param(
-        [Parameter(Mandatory = $true)]
-        [System.Array]
-        $Groups,
+    # Drill down
+    # Body.ScriptBlock is the part after "Configuration <InstanceName> {"
+    # EndBlock is the actual code within that Configuration block
+    # Find the first DynamicKeywordStatement that has a word "Node" in it, find all "NamedBlockAst" elements, these are the DSC resource definitions
+    $resourceInstances = $Config.Body.ScriptBlock.EndBlock.Statements.Find({$Args[0].GetType().Name -eq 'DynamicKeywordStatementAst' -and $Args[0].CommandElements[0].StringConstantType -eq 'BareWord' -and $Args[0].CommandElements[0].Value -eq 'Node'}, $False).commandElements[2].ScriptBlock.Find({$Args[0].GetType().Name -eq 'NamedBlockAst'}, $False).Statements
 
-        [Parameter(Mandatory = $true)]
-        [System.Array]
-        $Path,
+    # Get the name of the configuration.
+    $configurationName = $Config.InstanceName.Value
 
-        [Parameter()]
-        [System.Boolean]
-        $IsSubGroup = $false,
+    $totalCount = 1
+    foreach ($resource in $resourceInstances)
+    {
+        $currentResourceInfo = @{}
 
-        [Array] $NoisyOperators,
+        # CommandElements
+        # 0 - Resource Type
+        # 1 - Resource Instance Name
+        # 2 - Key/Pair Value list of parameters.
+        $resourceType         = $resource.CommandElements[0].Value
+        $resourceInstanceName = $resource.CommandElements[1].Value
 
-        [switch] $IncludeComments
-    )
+        $percent = ($totalCount / ($resourceInstances.Count) * 100)
+        Write-Progress -Status "[$totalCount/$($resourceInstances.Count)] $resourceType - $resourceInstanceName" `
+                       -PercentComplete $percent `
+                       -Activity "Parsing Resources"
+        $currentResourceInfo.Add("ResourceName", $resourceType)
+        $currentResourceInfo.Add("ResourceInstanceName", $resourceInstanceName)
 
-    # Loop through all the Resources identified within our configuration
-    $currentIndex = 1
-    $result = [ordered] @{}
-    $ParsedResults = @()
-    foreach ($group in $Groups) {
-        $keywordFound = $false
-        if (-not $IsSubGroup -and $currentIndex -le $Groups.Count - 2) {
-            Write-Progress -PercentComplete ($currentIndex / ($Groups.Count - 2) * 100) -Activity "Parsing $Path [$($currentIndex)/$($Groups.Count-2)]"
-        }
-        $currentPropertyIndex = 0
-        $currentProperty = ''
-        while ($currentPropertyIndex -lt $group.Count) {
-            $component = $group[$currentPropertyIndex]
-            if ($component.Type -eq "Keyword" -and -not $keywordFound)
+        # Get a reference to the current resource.
+        $currentResource = $DSCResources | Where-Object -FilterScript {$_.Name -eq $resourceType}
+
+        # Loop through all the key/pair value
+        foreach ($keyValuePair in $resource.CommandElements[2].KeyValuePairs)
+        {
+            $isVariable = $false
+            $key        = $keyValuePair.Item1.Value
+
+            if ($null -ne $keyValuePair.Item2.PipelineElements)
             {
-                $result = [ordered] @{ ResourceName = $component.Content }
-                $keywordFound = $true
-
-                # Check to see this is not a CIMInstance (where the next entry is '{')
-                if ($group[$currentPropertyIndex + 1].Content -ne '{')
+                if ($null -eq $keyValuePair.Item2.PipelineElements.Expression.Value)
                 {
-                    $currentPropertyIndex++
-                    $result.Add('ResourceInstanceName', $group[$currentPropertyIndex].Content)
-                }
-            }
-            elseif ($keywordFound) {
-                # If the next component is a keyword and we've already identified a keyword for this group, that means that we are
-                # looking at a CIMInstance property;
-                if ($component.Type -eq "Keyword") {
-                    $currentGroupEndFound = $false
-                    $currentPosition = $currentPropertyIndex + 1
-                    $subGroup = @($component)
-                    $ObjectsToClose = 0
-                    $allSubGroups = @()
-                    [Array]$subResult = @()
-                    while (!$currentGroupEndFound) {
-                        $currentSubComponent = $group[$currentPosition]
-                        if ($currentSubComponent.Type -eq 'GroupStart' -or $currentSubComponent.Content -eq '{') {
-                            $ObjectsToClose++
-                        } elseif ($currentSubComponent.Type -eq 'GroupEnd' -or $currentSubComponent.Content -eq '}') {
-                            $ObjectsToClose--
-                        }
+                    $value = $keyValuePair.Item2.PipelineElements.Expression.ToString()
 
-                        $subGroup += $group[$currentPosition]
-                        if ($ObjectsToClose -eq 0 -and $group[$currentPosition + 1].Type -ne 'Keyword' -and `
-                                $group[$currentPosition].Type -ne 'Keyword') {
-                            $currentGroupEndFound = $true
-                        }
-
-                        if ($ObjectsToClose -eq 0 -and $group[$currentPosition].Type -ne 'Keyword') {
-                            $allSubGroups += , $subGroup
-                            $subGroup = @()
-                        }
-                        $currentPosition++
-                    }
-                    $currentPropertyIndex = $currentPosition
-                    $subResult = Get-HashtableFromGroup -Groups $allSubGroups -IsSubGroup $true -Path $Path -IncludeComments:$IncludeComments.IsPresent -NoisyOperators $NoisyOperators
-                    $subResult[0].Add("CIMInstance", $subResult.ResourceName)
-                    $subResult[0].Remove("ResourceName") | Out-Null
-                    $allSubGroups = @()
-                    $subGroup = @()
-                    $result.$currentProperty += $subResult
-                }
-                # If the next component is not an operator, that means that the current member is part of the previous property's
-                # value;
-                elseif ($group[$currentPropertyIndex + 1].Type -ne "Operator" -and $component.Content -ne "=" -and `
-                        $component.Content -ne '{' -and $component.Content -ne '}' -and $group[$currentPropertyIndex + 1].Type -ne 'Keyword') {
-                    switch ($component.Type) {
-                        { $_ -in @("String", "Number") } {
-                            $result.$currentProperty += $component.Content
-                            break
-                        }
-                        { $_ -in @("Variable") } {
-                            # Based on the logic if if it's TRUE or FALSE we keep it as a boolean
-                            # if it's other type of variable we keep it as a string with added $ character
-                            if ($component.Content.ToLower() -eq 'true') {
-                                $result.$currentProperty += $true
-                            } elseif ($component.Content.ToLower() -eq 'false') {
-                                $result.$currentProperty += $false
-                            } elseif ($component.Content.ToLower() -eq 'null') {
-                                $result.$currentProperty += $null
-                            } else {
-                                $result.$currentProperty += "`$" + $component.Content
-                            }
-                            break
-                        }
-                        { $_ -in @("Member") } {
-                            $result.$currentProperty += "." + $component.Content
-                            break
-                        }
-                        { $_ -in @("Command") } {
-                            $result.ResourceID += $component.Content
-                            break
-                        }
-                        { $_ -in @("Comment") } {
-                            if ($IncludeComments) {
-                                $result.$("_metadata_" + $currentProperty) += $component.Content
-                            }
-                            break
-                        }
-                        { $_ -in @("GroupStart") } {
-
-                            # Property is an Array
-                            $result.$currentProperty = @()
-
-                            do {
-                                # we will need to wait till we find end of array rather than terminating the loop early on
-                                $currentPropertyIndex++
-                                while ($group[$currentPropertyIndex].Type -eq 'NewLine') {
-                                    $currentPropertyIndex++
-                                }
-
-                                switch ($group[$currentPropertyIndex].Type) {
-                                    # Property is an array of string or integer
-                                    { $_ -in @("String", "Number", "Variable") } {
-                                        do {
-                                            $ValueToSet = $group[$currentPropertyIndex].Content
-                                            if ($group[$currentPropertyIndex].Content -notin $noisyOperators) {
-                                                $Type = $group[$currentPropertyIndex].Type
-                                                if ($Type -eq "Variable") {
-                                                    # Based on the logic if if it's TRUE or FALSE we keep it as a boolean
-                                                    # if it's other type of variable we keep it as a string with added $ character
-
-                                                    if ($ValueToSet.ToLower() -eq 'true') {
-                                                        $ValueToSet = $true
-                                                    } elseif ($ValueToSet.ToLower() -eq 'false') {
-                                                        $ValueToSet = $false
-                                                    } elseif ($ValueToSet.ToLower() -eq 'null') {
-                                                        $ValueToSet = $null
-                                                    } else {
-                                                        $ValueToSet = "`$" + $ValueToSet
-                                                        # Supports variable name escape syntax within arrays
-                                                        Do {
-                                                            $currentPropertyIndex++
-                                                            $ValueToSet += $group[$CurrentPropertyIndex].Content
-                                                        } until (($group[$CurrentPropertyIndex + 1].Type -eq 'Operator' -and $group[$CurrentPropertyIndex + 1].Content -eq ',') -or $group[$currentPropertyIndex + 1].Type -eq 'GroupEnd')
-                                                    }
-                                                }
-
-                                                $result.$currentProperty += $ValueToSet
-                                            }
-                                            $currentPropertyIndex++
-                                        }
-                                        while ($group[$currentPropertyIndex].Type -ne 'GroupEnd')
-                                        break
-                                    }
-
-                                    # Property is an array of CIMInstance
-                                    "Keyword" {
-                                        $CimInstanceComponents = @()
-                                        $GroupsToClose = 0
-                                        $FoundOneGroup = $false
-                                        do {
-                                            if ($group[$currentPropertyIndex].Type -eq 'GroupStart') {
-                                                $FoundOneGroup = $true
-                                                $GroupsToClose ++
-                                            } elseif ($group[$currentPropertyIndex].Type -eq 'GroupEnd') {
-                                                $GroupsToClose --
-                                            }
-                                            if ($group[$currentPropertyIndex].Content -notin $noisyOperators) {
-                                                $CimInstanceComponents += $group[$currentPropertyIndex]
-                                            }
-                                            $currentPropertyIndex++
-                                        }
-                                        while ($group[$currentPropertyIndex - 1].Type -ne 'GroupEnd' -or $GroupsToClose -ne 0 -or -not $FoundOneGroup)
-                                        $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents -NoisyOperators $NoisyOperators
-                                        $result.$CurrentProperty += $CimInstanceObject
-                                        break
-                                    }
-                                }
-
-                            } while ($group[$currentPropertyIndex].Type -ne 'GroupEnd' -and $token.Content -ne ')')
-                            break
-                        }
-                    }
-                } elseif ($component.Content -notin $noisyOperators) {
-                    switch ($component.Type) {
-                        "Member" {
-                            $currentProperty = $component.Content.ToString()
-
-                            if (!$result.Contains($currentProperty)) {
-                                $result.Add($currentProperty, $null)
-                            }
-                        }
-                        "Variable" {
-                            # This is added to handle advanced variables such as $Test.Nested.Variable on 1st level
-                            $result.$currentProperty += "`$" + $component.Content
-                            Do {
-                                $currentPropertyIndex++
-                                $result.$currentProperty += $group[$CurrentPropertyIndex].Content
-                            } until ($group[$CurrentPropertyIndex + 1].Type -eq 'NewLine')
-                        }
-                    }
-                }
-            }
-            $currentPropertyIndex++
-        }
-
-        if ($keywordFound) {
-            $ParsedResults += $result
-        }
-        $currentIndex++
-    }
-    return $ParsedResults
-}
-
-function Convert-CIMInstanceToPSObject {
-    [CmdletBinding()]
-    [OutputType([System.Collections.IDictionary])]
-    Param(
-        [Parameter(Mandatory = $true)]
-        [System.Object[]]
-        $CIMInstance,
-
-        [Array] $NoisyOperators
-    )
-
-    $result = [ordered] @{}
-    $index = 0
-    $CurrentMemberName = $null
-    while ($index -lt $CimInstance.Count) {
-        $token = $CIMInstance[$index]
-        switch ($token.Type) {
-            # The main token for the CIMInstance
-            "Keyword" {
-                if (-not $result.Contains('CIMInstance'))
-                {
-                    $result.Add("CIMInstance", $token.Content)
-                }
-                break
-            }
-            "Member" {
-                if (-not $result.Contains($token.Content))
-                {
-                    $result.Add($token.Content, "")
-                }
-                $CurrentMemberName = $token.Content
-                break
-            }
-            { $_ -in "String", "Number" } {
-                $result.$CurrentMemberName = $token.Content
-                break
-            }
-            { $_ -in @("Variable") } {
-                # Based on the logic if if it's TRUE or FALSE we keep it as a boolean
-                # if it's other type of variable we keep it as a string with added $ character
-                if ($token.Content.ToLower() -eq 'true') {
-                    $result.$CurrentMemberName = $true
-                } elseif ($token.Content.ToLower() -eq 'false') {
-                    $result.$CurrentMemberName = $false
-                } elseif ($token.Content.ToLower() -eq 'null') {
-                    $result.$CurrentMemberName = $null
-                } else {
-                    $result.$CurrentMemberName = "`$" + $token.Content
-                    # Supports variable name escape syntax within ciminstances
-                    Do {
-                        $index++
-                        $result.$CurrentMemberName += $CIMInstance[$index].Content
-                    } until ($CIMInstance[$index + 1].Type -eq 'NewLine')
-                }
-                break
-            }
-            { $_ -eq "GroupStart" -and $token.Content -eq '@(' } {
-                $result.$CurrentMemberName = @()
-                $index++
-                while ($CimInstance[$index].Type -eq 'NewLine') {
-                    $index++
-                }
-                switch ($CIMInstance[$index].Type) {
-                    { $_ -in "String", "Number", "Variable" } {
-                        $arrayContent = @()
-                        do {
-                            $content = $CIMInstance[$index].Content
-
-                            if ($_ -in @("Variable")) {
-                                # Based on the logic if if it's TRUE or FALSE we keep it as a boolean
-                                # if it's other type of variable we keep it as a string with added $ character
-                                if ($content.ToLower() -eq 'true') {
-                                    $content = $true
-                                } elseif ($content.ToLower() -eq 'false') {
-                                    $content = $false
-                                } elseif ($content.ToLower() -eq 'null') {
-                                    $content = $null
-                                } else {
-                                    $content = "`$" + $content
-                                }
-                            } elseif ($_ -in @("String", "Number")) {
-                                $content = $content
-                            }
-                            $arrayContent += $content
-                            $index++
-                        } while ($CIMInstance[$index].Type -ne 'GroupEnd')
-                        $result.$CurrentMemberName = $arrayContent
-                    }
-
-                    # The Content of the Array is yet again CIMInstances. Recursively call into the current method;
-                    "Keyword" {
-                        while ($CIMInstance[$index].Content -ne ')' -and $CImInstance[$index].Type -ne 'GroupEnd') {
-                            $CIMInstanceComponents = @()
-                            $GroupsToClose = 0
-                            $FoundOneGroup = $false
-                            do {
-                                if ($CIMInstance[$index].Type -eq 'GroupStart') {
-                                    $FoundOneGroup = $true
-                                    $GroupsToClose ++
-                                } elseif ($CIMInstance[$index].Type -eq 'GroupEnd') {
-                                    $GroupsToClose --
-                                }
-                                if ($CIMInstance[$index].Content -notin $noisyOperators) {
-                                    $CimInstanceComponents += $CIMInstance[$index]
-                                }
-                                $index++
-                            }
-                            while ($CIMInstance[$index - 1].Type -ne 'GroupEnd' -or $GroupsToClose -ne 0 -or -not $FoundOneGroup)
-                            $CimInstanceObject = Convert-CIMInstanceToPSObject -CIMInstance $CimInstanceComponents -NoisyOperators $NoisyOperators
-                            $result.$CurrentMemberName += $CimInstanceObject
-                            $index++
-                        }
-                    }
-                }
-            }
-            { $_ -eq "GroupStart" -and $token.Content -eq '{' } {
-                if (-not [System.String]::IsNullOrEmpty($CurrentMemberName))
-                {
-                    $subCim = @()
-                    $subCim += $CimInstance[$index-1]
-                    $subCim += $CimInstance[$index]
-                    $openedGroups = 1
-                    while ($openedGroups -gt 0)
+                    if ($value.StartsWith('$'))
                     {
-                        $index++
-                        $subCim += $CimInstance[$index]
-                        if ($CimInstance[$index].Type -eq 'GroupStart')
-                        {
-                            $openedGroups++
-                        }
-                        elseif ($CimInstance[$index].Type -eq 'GroupEnd')
-                        {
-                            $openedGroups --
-                        }
+                        $isVariable = $true
                     }
-
-                    $result.$CurrentMemberName = Convert-CIMInstanceToPSObject -CIMInstance $subCim -NoisyOperators $NoisyOperators
+                }
+                else
+                {
+                    $value = $keyValuePair.Item2.PipelineElements.Expression.Value
                 }
             }
+
+            # Retrieve the current property's type based on the resource's schema.
+            $currentPropertyInResourceSchema = $currentResource.Properties | Where-Object -FilterScript { $_.Name -eq $key }
+            $valueType = $currentPropertyInResourceSchema.PropertyType
+
+            # If the value type is null, then the parameter doesn't exist
+            # in the resource's schema and we throw a warning
+            $propertyFound = $true
+            if ($null -eq $valueType)
+            {
+                $propertyFound = $false
+                Write-Warning "Defined property {$key} was not found in resource {$resourceType}"
+            }
+
+            if ($propertyFound)
+            {
+                # If the current property is not a CIMInstance
+                if (-not $valueType.StartsWith('[MSFT_') -and `
+                    -not $valueType -eq '[string]')
+                {
+                    # Try to parse the value based on the retrieved type.
+                    $scriptBlock = @"
+                                    `$typeStaticMethods = $valueType | gm -static
+                                    if (`$typeStaticMethods.Name.Contains('Parse'))
+                                    {
+                                        `$value = $valueType::Parse($value)
+                                    }
+"@
+                    Invoke-Expression -Command $scriptBlock | Out-Null
+                }
+                elseif ($valueType -eq '[String]' -or $isVariable)
+                {
+                    $value = $value
+                }
+                else
+                {
+                    $value = ConvertFrom-CIMInstanceToHashtable -ChildObject $keyValuePair.Item2
+                }
+                $currentResourceInfo.Add($key, $value) | Out-Null
+            }
         }
-        $index++
+        
+        $result += $currentResourceInfo
+        $totalCount++
     }
-    return $result
+    Write-Progress -Completed `
+                   -Activity "Parsing Resources"
+
+    if ($IncludeComments)
+    {
+        $result = Update-DSCResultWithMetadata -Tokens $Tokens `
+                                               -ParsedObject $result
+    }
+
+    return [Array]$result
 }
 
 function ConvertFrom-DSCObject
