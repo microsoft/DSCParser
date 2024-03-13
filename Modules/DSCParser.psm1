@@ -88,7 +88,7 @@ function ConvertFrom-CIMInstanceToHashtable
         $result = @{}
         $KeyPairs = $ChildObject.CommandElements[2].KeyValuePairs
         $CIMInstanceName = $ChildObject.CommandElements[0].Value
-        $result.Add("CIMInstanceName", $CIMInstanceName)
+        $result.Add("CIMInstance", $CIMInstanceName)
         foreach ($entry in $keyPairs)
         {
             if ($null -ne $entry.Item2.PipelineElements)
@@ -263,7 +263,7 @@ function ConvertTo-DSCObject
             {
                 # If the current property is not a CIMInstance
                 if (-not $valueType.StartsWith('[MSFT_') -and `
-                    -not $valueType -eq '[string]')
+                    $valueType -ne '[string]')
                 {
                     # Try to parse the value based on the retrieved type.
                     $scriptBlock = @"
