@@ -263,7 +263,8 @@ function ConvertTo-DSCObject
             {
                 # If the current property is not a CIMInstance
                 if (-not $valueType.StartsWith('[MSFT_') -and `
-                    $valueType -ne '[string]')
+                    $valueType -ne '[string]' -and `
+                    $valueType -ne '[string[]]')
                 {
                     # Try to parse the value based on the retrieved type.
                     $scriptBlock = @"
@@ -275,7 +276,7 @@ function ConvertTo-DSCObject
 "@
                     Invoke-Expression -Command $scriptBlock | Out-Null
                 }
-                elseif ($valueType -eq '[String]' -or $isVariable)
+                elseif ($valueType -eq '[String]' -or $isVariable -or $valueType -eq '[string[]]')
                 {
                     $value = $value
                 }
