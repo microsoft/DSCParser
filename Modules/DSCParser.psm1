@@ -269,9 +269,9 @@ function ConvertTo-DSCObject
                     # Try to parse the value based on the retrieved type.
                     $scriptBlock = @"
                                     `$typeStaticMethods = $valueType | gm -static
-                                    if (`$typeStaticMethods.Name.Contains('Parse'))
+                                    if (`$typeStaticMethods.Name.Contains('TryParse'))
                                     {
-                                        `$value = $valueType::Parse($value)
+                                        $valueType::TryParse(`$value, [ref]`$value) | Out-Null
                                     }
 "@
                     Invoke-Expression -Command $scriptBlock | Out-Null
