@@ -71,7 +71,11 @@ function ConvertFrom-CIMInstanceToHashtable
     param(
         [Parameter(Mandatory = $true)]
         [System.Object]
-        $ChildObject
+        $ChildObject,
+
+        [Parameter(Mandatory = $true)]
+        [System.String]
+        $ResourceName
     )
     # Case we have an array of CIMInstances
     if ($ChildObject.GetType().Name -eq 'PipelineAst')
@@ -80,7 +84,8 @@ function ConvertFrom-CIMInstanceToHashtable
         $statements = $ChildObject.PipelineElements.Expression.SubExpression.Statements
         foreach ($statement in $statements)
         {
-            $result += ConvertFrom-CIMInstanceToHashtable -ChildObject $statement
+            $result += ConvertFrom-CIMInstanceToHashtable -ChildObject $statement `
+                                                          -ResourceName $ResourceName
         }
     }
     else
@@ -88,9 +93,61 @@ function ConvertFrom-CIMInstanceToHashtable
         $result = @{}
         $KeyPairs = $ChildObject.CommandElements[2].KeyValuePairs
         $CIMInstanceName = $ChildObject.CommandElements[0].Value
+
+        # Get the CimClass associated with the current CimInstanceName
+        $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
+                                       -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                       -ErrorAction SilentlyContinue
+
+        if ($null -eq $CIMClassObject)
+        {
+            $dscResourceInfo = Get-DSCResource -Name $ResourceName
+            $InvokeParams = @{
+                Name        = $ResourceName
+                Method      = 'Get'
+                Property    = @{
+                    'dummyValue' = 'dummyValue'
+                }
+                ModuleName  = @{
+                    ModuleName    = $dscResourceInfo.ModuleName
+                    ModuleVersion = $dscResourceInfo.Version
+                }
+                ErrorAction = 'Stop'
+            }
+
+            try
+            {
+                Invoke-DscResource @InvokeParams
+                
+                $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
+                                       -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                       -ErrorAction SilentlyContinue
+
+                $breaker = 5
+                while ($null -eq $CIMCLassObject -and $breaker -gt 0)
+                {
+                    Start-Sleep -Seconds 1
+                    $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
+                                       -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                       -ErrorAction SilentlyContinue
+                    $breaker--
+                }
+            }
+            catch
+            {
+                # We only care if the resource can't be found, not if it fails while executing
+                if ($_.Exception.Message -match '(Resource \w+ was not found|The PowerShell DSC resource .+ does not exist at the PowerShell module path nor is it registered as a WMI DSC resource)')
+                {
+                    throw $_
+                }
+            }
+        }
+        $CIMClassProperties = $CIMClassObject.CimClassProperties
+
         $result.Add("CIMInstance", $CIMInstanceName)
         foreach ($entry in $keyPairs)
         {
+            $associatedCIMProperty = $CIMClassProperties | Where-Object -FilterScript {$_.Name -eq $entry.Item1.ToString()}
             if ($null -ne $entry.Item2.PipelineElements)
             {
                 $staticType = $entry.Item2.PipelineElements.Expression.StaticType.ToString()
@@ -121,7 +178,8 @@ function ConvertFrom-CIMInstanceToHashtable
                 $subResult = @()
                 foreach ($subItem in $subExpression)
                 {
-                    $subResult += ConvertFrom-CIMInstanceToHashtable -ChildObject $subItem.Statements
+                    $subResult += ConvertFrom-CIMInstanceToHashtable -ChildObject $subItem.Statements `
+                                                                     -ResourceName $ResourceName
                 }
                 $result.Add($entry.Item1.ToString(), $subResult)
             }
@@ -129,11 +187,25 @@ function ConvertFrom-CIMInstanceToHashtable
             elseif ($staticType -eq 'System.Collections.Hashtable' -and `
                 $subExpression.ToString().StartsWith('MSFT_'))
             {
-                $subResult = ConvertFrom-CIMInstanceToHashtable -ChildObject $entry.Item2
+                $subResult = ConvertFrom-CIMInstanceToHashtable -ChildObject $entry.Item2 `
+                                                                -ResourceName $ResourceName
                 $result.Add($entry.Item1.ToString(), $subResult)
             }
             else
             {
+                if ($associatedCIMProperty.CIMType -ne 'string' -and `
+                    $associatedCIMProperty.CIMType -ne 'stringArray')
+                {
+                    # Try to parse the value based on the retrieved type.
+                    $scriptBlock = @"
+                                    `$typeStaticMethods = [$($associatedCIMProperty.CIMType)] | gm -static
+                                    if (`$typeStaticMethods.Name.Contains('TryParse'))
+                                    {
+                                        [$($associatedCIMProperty.CIMType)]::TryParse(`$subExpression, [ref]`$subExpression) | Out-Null
+                                    }
+"@
+                    Invoke-Expression -Command $scriptBlock | Out-Null
+                }
                 $result.Add($entry.Item1.ToString(), $subExpression)
             }
         }
@@ -196,7 +268,7 @@ function ConvertTo-DSCObject
         if ($null -ne $statement.CommandElements -and $null -ne $statement.CommandElements[0].Value -and `
             $statement.CommandElements[0].Value -eq 'Import-DSCResource')
         {
-            for ($i = 0; $i -le $statement.CommandElements.COunt; $i++)
+            for ($i = 0; $i -le $statement.CommandElements.Count; $i++)
             {
                 if ($statement.CommandElements[$i].ParameterName -eq 'ModuleName' -and `
                     ($i+1) -lt $statement.CommandElements.Count)
@@ -298,7 +370,8 @@ function ConvertTo-DSCObject
                 }
                 else
                 {
-                    $value = ConvertFrom-CIMInstanceToHashtable -ChildObject $keyValuePair.Item2
+                    $value = ConvertFrom-CIMInstanceToHashtable -ChildObject $keyValuePair.Item2 `
+                                                                -ResourceName $resourceType
                 }
                 $currentResourceInfo.Add($key, $value) | Out-Null
             }
