@@ -176,10 +176,6 @@ function ConvertTo-DSCObject
     $Tokens      = $null
     $ParseErrors = $null
 
-    # Retrieve information about the resources in the Microsoft365DSC
-    # Module for schema and property type validation.
-    $DSCResources = Get-DSCResource -Module 'Microsoft365DSC'
-
     # Use the AST to parse the DSC configuration
     if (-not [System.String]::IsNullOrEmpty($Path))
     {
@@ -191,6 +187,26 @@ function ConvertTo-DSCObject
     }
     # Look up the Configuration definition ("")
     $Config = $AST.Find({$Args[0].GetType().Name -eq 'ConfigurationDefinitionAst'}, $False)
+
+    # Retrieve information about the DSC Modules imported in the config
+    # and get the list of their associated resources.
+    $DSCResources = @()
+    foreach ($statement in $config.body.ScriptBlock.EndBlock.Statements)
+    {
+        if ($null -ne $statement.CommandElements -and $null -ne $statement.CommandElements[0].Value -and `
+            $statement.CommandElements[0].Value -eq 'Import-DSCResource')
+        {
+            for ($i = 0; $i -le $statement.CommandElements.COunt; $i++)
+            {
+                if ($statement.CommandElements[$i].ParameterName -eq 'ModuleName' -and `
+                    ($i+1) -lt $statement.CommandElements.Count)
+                {         
+                    $moduleName = $statement.CommandElements[$i+1].Value      
+                    $DSCResources += Get-DSCResource -Module $moduleName
+                }
+            }
+        }
+    }
 
     # Drill down
     # Body.ScriptBlock is the part after "Configuration <InstanceName> {"
