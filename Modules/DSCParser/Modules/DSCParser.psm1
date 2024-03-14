@@ -184,8 +184,9 @@ function ConvertFrom-CIMInstanceToHashtable
                 $result.Add($entry.Item1.ToString(), $subResult)
             }
             # Case the item is a single CIMInstance.
-            elseif ($staticType -eq 'System.Collections.Hashtable' -and `
-                $subExpression.ToString().StartsWith('MSFT_'))
+            elseif (($staticType -eq 'System.Collections.Hashtable' -and `
+                $subExpression.ToString().StartsWith('MSFT_')) -or `
+                $associatedCIMProperty.CIMType -eq 'InstanceArray')
             {
                 $subResult = ConvertFrom-CIMInstanceToHashtable -ChildObject $entry.Item2 `
                                                                 -ResourceName $ResourceName
@@ -196,6 +197,10 @@ function ConvertFrom-CIMInstanceToHashtable
                 if ($associatedCIMProperty.CIMType -ne 'string' -and `
                     $associatedCIMProperty.CIMType -ne 'stringArray')
                 {
+                    if ($associatedCIMProperty.CIMType -eq '')
+                    {
+                        $nik = ''
+                    }
                     # Try to parse the value based on the retrieved type.
                     $scriptBlock = @"
                                     `$typeStaticMethods = [$($associatedCIMProperty.CIMType)] | gm -static
@@ -249,34 +254,54 @@ function ConvertTo-DSCObject
     $ParseErrors = $null
 
     # Use the AST to parse the DSC configuration
-    if (-not [System.String]::IsNullOrEmpty($Path))
+    if (-not [System.String]::IsNullOrEmpty($Path) -and [System.String]::IsNullOrEmpty($Content))
     {
-        $AST = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $Path), [ref]$Tokens, [ref]$ParseErrors)
+        $Content = Get-Content $Path -Raw
     }
-    else
-    {
-        $AST = [System.Management.Automation.Language.Parser]::ParseInput($Content, [ref]$Tokens, [ref]$ParseErrors)
-    }
+    $AST = [System.Management.Automation.Language.Parser]::ParseInput($Content, [ref]$Tokens, [ref]$ParseErrors)
+    
     # Look up the Configuration definition ("")
     $Config = $AST.Find({$Args[0].GetType().Name -eq 'ConfigurationDefinitionAst'}, $False)
 
     # Retrieve information about the DSC Modules imported in the config
     # and get the list of their associated resources.
-    $DSCResources = @()
+    $ModulesToLoad = @()
     foreach ($statement in $config.body.ScriptBlock.EndBlock.Statements)
     {
         if ($null -ne $statement.CommandElements -and $null -ne $statement.CommandElements[0].Value -and `
             $statement.CommandElements[0].Value -eq 'Import-DSCResource')
         {
+            $currentModule = @{}
             for ($i = 0; $i -le $statement.CommandElements.Count; $i++)
             {
                 if ($statement.CommandElements[$i].ParameterName -eq 'ModuleName' -and `
                     ($i+1) -lt $statement.CommandElements.Count)
                 {         
                     $moduleName = $statement.CommandElements[$i+1].Value      
-                    $DSCResources += Get-DSCResource -Module $moduleName
+                    $currentModule.Add('ModuleName', $moduleName)
+                }
+                elseif ($statement.CommandElements[$i].ParameterName -eq 'ModuleVersion' -and `
+                    ($i+1) -lt $statement.CommandElements.Count)
+                {
+                    $moduleVersion = $statement.CommandElements[$i+1].Value 
+                    $currentModule.Add('ModuleVersion', $moduleVersion)
                 }
             }
+            $ModulesToLoad += $currentModule
+        }
+    }
+    $DSCResources = @()
+    foreach ($moduleToLoad in $ModulesToLoad)
+    {
+        $loadedModuleTest = Get-Module -Name $moduleToLoad.ModuleName -ListAvailable | Where-Object -FilterScript {$_.Version -eq $moduleToLoad.ModuleVersion}
+        
+        if ($null -eq $loadedModuleTest)
+        {
+            throw "Module {$($moduleToLoad.ModuleName)} version {$($moduleToLoad.ModuleVersion)} specified in the configuration isn't installed on the machine/agent."
+        }
+        else
+        {
+            $DSCResources += Get-DSCResource -Module $moduleToLoad.ModuleName
         }
     }
 
