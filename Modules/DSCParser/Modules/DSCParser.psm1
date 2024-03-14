@@ -364,9 +364,15 @@ function ConvertTo-DSCObject
 "@
                     Invoke-Expression -Command $scriptBlock | Out-Null
                 }
-                elseif ($valueType -eq '[String]' -or $isVariable -or $valueType -eq '[string[]]')
+                elseif ($valueType -eq '[String]' -or $isVariable)
                 {
                     $value = $value
+                }
+                elseif ($valueType -eq '[string[]]')
+                {
+                    # Try to parse the value based on the retrieved type.
+                    $scriptBlock = "`$value = $($value.Replace('$', '`$'))"
+                    Invoke-Expression -Command $scriptBlock | Out-Null
                 }
                 else
                 {
