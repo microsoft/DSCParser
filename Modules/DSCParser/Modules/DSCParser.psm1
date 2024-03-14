@@ -370,9 +370,19 @@ function ConvertTo-DSCObject
                 }
                 elseif ($valueType -eq '[string[]]')
                 {
-                    # Try to parse the value based on the retrieved type.
-                    $scriptBlock = "`$value = $($value.Replace('$', '`$'))"
-                    Invoke-Expression -Command $scriptBlock | Out-Null
+                    # If the property is an array but there's only one value
+                    # specified as a string (not specifying the @()) then
+                    # we need to create the array.
+                    if (-not $value.StartsWith('@('))
+                    {
+                        $value = @($value)
+                    }
+                    else
+                    {
+                        # Try to parse the value based on the retrieved type.
+                        $scriptBlock = "`$value = $($value.Replace('$', '`$'))"
+                        Invoke-Expression -Command $scriptBlock | Out-Null
+                    }
                 }
                 else
                 {
