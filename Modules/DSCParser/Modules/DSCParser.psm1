@@ -90,129 +90,134 @@ function ConvertFrom-CIMInstanceToHashtable
     }
     else
     {
-        $result = @{}
-        $KeyPairs = $ChildObject.CommandElements[2].KeyValuePairs
-        $CIMInstanceName = $ChildObject.CommandElements[0].Value
-
-        # Get the CimClass associated with the current CimInstanceName
-        $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
-                                       -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
-                                       -ErrorAction SilentlyContinue
-
-        if ($null -eq $CIMClassObject)
+        $result = @()
+        for ($i = 1; $i -le $ChildObject.CommandElements.Count / 3; $i++)
         {
-            $dscResourceInfo = Get-DSCResource -Name $ResourceName
-            $InvokeParams = @{
-                Name        = $ResourceName
-                Method      = 'Get'
-                Property    = @{
-                    'dummyValue' = 'dummyValue'
-                }
-                ModuleName  = @{
-                    ModuleName    = $dscResourceInfo.ModuleName
-                    ModuleVersion = $dscResourceInfo.Version
-                }
-                ErrorAction = 'Stop'
-            }
+            $currentResult = @{}
+            $KeyPairs = $ChildObject.CommandElements[$i*3-1].KeyValuePairs
+            $CIMInstanceName = $ChildObject.CommandElements[($i-1)*3].Value
 
-            try
+            # Get the CimClass associated with the current CimInstanceName
+            $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
+                                           -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                           -ErrorAction SilentlyContinue
+
+            if ($null -eq $CIMClassObject)
             {
-                Invoke-DscResource @InvokeParams
+                $dscResourceInfo = Get-DSCResource -Name $ResourceName
+                $InvokeParams = @{
+                    Name        = $ResourceName
+                    Method      = 'Get'
+                    Property    = @{
+                        'dummyValue' = 'dummyValue'
+                    }
+                    ModuleName  = @{
+                        ModuleName    = $dscResourceInfo.ModuleName
+                        ModuleVersion = $dscResourceInfo.Version
+                    }
+                    ErrorAction = 'Stop'
+                }
+
+                try
+                {
+                    Invoke-DscResource @InvokeParams -ErrorAction SilentlyContinue
                 
-                $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
-                                       -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
-                                       -ErrorAction SilentlyContinue
-
-                $breaker = 5
-                while ($null -eq $CIMCLassObject -and $breaker -gt 0)
-                {
-                    Start-Sleep -Seconds 1
                     $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
-                                       -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
-                                       -ErrorAction SilentlyContinue
-                    $breaker--
-                }
-            }
-            catch
-            {
-                # We only care if the resource can't be found, not if it fails while executing
-                if ($_.Exception.Message -match '(Resource \w+ was not found|The PowerShell DSC resource .+ does not exist at the PowerShell module path nor is it registered as a WMI DSC resource)')
-                {
-                    throw $_
-                }
-            }
-        }
-        $CIMClassProperties = $CIMClassObject.CimClassProperties
+                                           -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                           -ErrorAction SilentlyContinue
 
-        $result.Add("CIMInstance", $CIMInstanceName)
-        foreach ($entry in $keyPairs)
-        {
-            $associatedCIMProperty = $CIMClassProperties | Where-Object -FilterScript {$_.Name -eq $entry.Item1.ToString()}
-            if ($null -ne $entry.Item2.PipelineElements)
-            {
-                $staticType = $entry.Item2.PipelineElements.Expression.StaticType.ToString()
-                $subExpression = $entry.Item2.PipelineElements.Expression.SubExpression
-
-                if ([System.String]::IsNullOrEmpty($subExpression))
-                {
-                    if ([System.String]::IsNullOrEmpty($entry.Item2.PipelineElements.Expression.Value))
+                    $breaker = 5
+                    while ($null -eq $CIMCLassObject -and $breaker -gt 0)
                     {
-                        $subExpression = $entry.Item2.PipelineElements.Expression.ToString()
+                        Start-Sleep -Seconds 1
+                        $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
+                                           -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                           -ErrorAction SilentlyContinue
+                        $breaker--
                     }
-                    else
+                }
+                catch
+                {
+                    # We only care if the resource can't be found, not if it fails while executing
+                    if ($_.Exception.Message -match '(Resource \w+ was not found|The PowerShell DSC resource .+ does not exist at the PowerShell module path nor is it registered as a WMI DSC resource)')
                     {
-                        $subExpression = $entry.Item2.PipelineElements.Expression.Value
+                        throw $_
                     }
                 }
             }
-            elseif ($null -ne $entry.Item2.CommandElements)
-            {
-                $staticType    = $entry.Item2.CommandElements[2].StaticType.ToString()
-                $subExpression = $entry.Item2.CommandElements[0].Value
-            }
+            $CIMClassProperties = $CIMClassObject.CimClassProperties
 
-            # Case where the item is an array of Sub-CIMInstances.
-            if ($staticType -eq 'System.Object[]' -and `
-                $subExpression.ToString().StartsWith('MSFT_'))
+            $currentResult.Add("CIMInstance", $CIMInstanceName)
+            foreach ($entry in $keyPairs)
             {
-                $subResult = @()
-                foreach ($subItem in $subExpression)
+                $associatedCIMProperty = $CIMClassProperties | Where-Object -FilterScript {$_.Name -eq $entry.Item1.ToString()}
+                if ($null -ne $entry.Item2.PipelineElements)
                 {
-                    $subResult += ConvertFrom-CIMInstanceToHashtable -ChildObject $subItem.Statements `
-                                                                     -ResourceName $ResourceName
-                }
-                $result.Add($entry.Item1.ToString(), $subResult)
-            }
-            # Case the item is a single CIMInstance.
-            elseif (($staticType -eq 'System.Collections.Hashtable' -and `
-                $subExpression.ToString().StartsWith('MSFT_')) -or `
-                $associatedCIMProperty.CIMType -eq 'InstanceArray')
-            {
-                $subResult = ConvertFrom-CIMInstanceToHashtable -ChildObject $entry.Item2 `
-                                                                -ResourceName $ResourceName
-                $result.Add($entry.Item1.ToString(), $subResult)
-            }
-            else
-            {
-                if ($associatedCIMProperty.CIMType -ne 'string' -and `
-                    $associatedCIMProperty.CIMType -ne 'stringArray')
-                {
-                    if ($associatedCIMProperty.CIMType -eq '')
+                    $staticType = $entry.Item2.PipelineElements.Expression.StaticType.ToString()
+                    $subExpression = $entry.Item2.PipelineElements.Expression.SubExpression
+
+                    if ([System.String]::IsNullOrEmpty($subExpression))
                     {
-                        $nik = ''
+                        if ([System.String]::IsNullOrEmpty($entry.Item2.PipelineElements.Expression.Value))
+                        {
+                            $subExpression = $entry.Item2.PipelineElements.Expression.ToString()
+                        }
+                        else
+                        {
+                            $subExpression = $entry.Item2.PipelineElements.Expression.Value
+                        }
                     }
-                    # Try to parse the value based on the retrieved type.
-                    $scriptBlock = @"
-                                    `$typeStaticMethods = [$($associatedCIMProperty.CIMType)] | gm -static
-                                    if (`$typeStaticMethods.Name.Contains('TryParse'))
-                                    {
-                                        [$($associatedCIMProperty.CIMType)]::TryParse(`$subExpression, [ref]`$subExpression) | Out-Null
-                                    }
+                }
+                elseif ($null -ne $entry.Item2.CommandElements)
+                {
+                    $staticType    = $entry.Item2.CommandElements[2].StaticType.ToString()
+                    $subExpression = $entry.Item2.CommandElements[0].Value
+                }
+
+                # Case where the item is an array of Sub-CIMInstances.
+                if ($staticType -eq 'System.Object[]' -and `
+                    $subExpression.ToString().StartsWith('MSFT_'))
+                {
+                    $subResult = @()
+                    foreach ($subItem in $subExpression)
+                    {
+                        $subResult += ConvertFrom-CIMInstanceToHashtable -ChildObject $subItem.Statements `
+                                                                         -ResourceName $ResourceName
+                    }
+                    $currentResult.Add($entry.Item1.ToString(), $subResult)
+                }
+                # Case the item is a single CIMInstance.
+                elseif (($staticType -eq 'System.Collections.Hashtable' -and `
+                    $subExpression.ToString().StartsWith('MSFT_')) -or `
+                    $associatedCIMProperty.CIMType -eq 'InstanceArray')
+                {
+                    $subResult = ConvertFrom-CIMInstanceToHashtable -ChildObject $entry.Item2 `
+                                                                    -ResourceName $ResourceName
+                    $currentResult.Add($entry.Item1.ToString(), $subResult)
+                }
+                else
+                {
+                    if ($associatedCIMProperty.CIMType -ne 'string' -and `
+                        $associatedCIMProperty.CIMType -ne 'stringArray')
+                    {
+                        if ([System.String]::IsNullOrEmpty($associatedCIMProperty.CImType))
+                        {
+                            $flag = ''
+                        }
+                        # Try to parse the value based on the retrieved type.
+                        $scriptBlock = @"
+                                        `$typeStaticMethods = [$($associatedCIMProperty.CIMType)] | gm -static
+                                        if (`$typeStaticMethods.Name.Contains('TryParse'))
+                                        {
+                                            [$($associatedCIMProperty.CIMType)]::TryParse(`$subExpression, [ref]`$subExpression) | Out-Null
+                                        }
 "@
-                    Invoke-Expression -Command $scriptBlock | Out-Null
+                        Invoke-Expression -Command $scriptBlock | Out-Null
+                    }
+                    $currentResult.Add($entry.Item1.ToString(), $subExpression)
                 }
-                $result.Add($entry.Item1.ToString(), $subExpression)
             }
+            $result += $currentResult
         }
     }
 
@@ -295,13 +300,19 @@ function ConvertTo-DSCObject
     {
         $loadedModuleTest = Get-Module -Name $moduleToLoad.ModuleName -ListAvailable | Where-Object -FilterScript {$_.Version -eq $moduleToLoad.ModuleVersion}
         
-        if ($null -eq $loadedModuleTest)
+        if ($null -eq $loadedModuleTest -and -not [System.String]::IsNullOrEmpty($moduleToLoad.ModuleVersion))
         {
             throw "Module {$($moduleToLoad.ModuleName)} version {$($moduleToLoad.ModuleVersion)} specified in the configuration isn't installed on the machine/agent. Install it by running: Install-Module -Name '$($moduleToLoad.ModuleName)' -RequiredVersion '$($moduleToLoad.ModuleVersion)'"
         }
         else
         {
-            $DSCResources += Get-DSCResource -Module $moduleToLoad.ModuleName
+            $currentResources = Get-DSCResource -Module $moduleToLoad.ModuleName
+
+            if (-not [System.String]::IsNullOrEmpty($moduleToLoad.ModuleVersion))
+            {
+                $currentResources | Where-Object -FilterScript {$_.Version -eq $moduleToLoad.ModuleVersion}
+            }
+            $DSCResources += $currentResources
         }
     }
 
@@ -346,7 +357,14 @@ function ConvertTo-DSCObject
             {
                 if ($null -eq $keyValuePair.Item2.PipelineElements.Expression.Value)
                 {
-                    $value = $keyValuePair.Item2.PipelineElements.Expression.ToString()
+                    if ($null -ne $keyValuePair.Item2.PipelineElements.Expression)
+                    {
+                        $value = $keyValuePair.Item2.PipelineElements.Expression.ToString()
+                    }
+                    else
+                    {
+                        $value = $keyValuePair.Item2.PipelineElements.Parent.ToString()
+                    }
 
                     if ($value.StartsWith('$'))
                     {
