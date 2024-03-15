@@ -200,10 +200,6 @@ function ConvertFrom-CIMInstanceToHashtable
                     if ($associatedCIMProperty.CIMType -ne 'string' -and `
                         $associatedCIMProperty.CIMType -ne 'stringArray')
                     {
-                        if ([System.String]::IsNullOrEmpty($associatedCIMProperty.CImType))
-                        {
-                            $flag = ''
-                        }
                         # Try to parse the value based on the retrieved type.
                         $scriptBlock = @"
                                         `$typeStaticMethods = [$($associatedCIMProperty.CIMType)] | gm -static
