@@ -505,14 +505,15 @@ function ConvertFrom-DSCObject
 
         if ($entry.'CIMInstance')
         {
-            [void]$results.AppendLine($childSpacer + $entry.CIMInstance)
+            [void]$results.AppendLine($childSpacer + $entry.CIMInstance + "{")
         }
         else
         {
             [void]$results.AppendLine($childSpacer + $entry.ResourceName + " `"$($entry.ResourceInstanceName)`"")
+            [void]$results.AppendLine("$childSpacer{")
         }
 
-        [void]$results.AppendLine("$childSpacer{")
+        $entry.Keys = $entry.Keys | Sort-Object
         foreach ($property in $entry.Keys)
         {
             if ($property -notin $ParametersToSkip)
@@ -529,11 +530,18 @@ function ConvertFrom-DSCObject
                 }
                 else
                 {
-                    switch($entry.$property.GetType().Name)
+                    switch -regex ($entry.$property.GetType().Name)
                     {
                         "String"
                         {
-                            [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= `"$($entry.$property.Replace('"', '`"'))`"")
+                            if ($entry.$property[0] -ne "$")
+                            {
+                                [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= `"$($entry.$property.Replace('"', '`"'))`"")
+                            }
+                            else
+                            {
+                                [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= $($entry.$property.Replace('"', '`"'))")
+                            }
                         }
                         "Int32"
                         {
@@ -543,7 +551,7 @@ function ConvertFrom-DSCObject
                         {
                             [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= `$$($entry.$property)")
                         }
-                        "Object[]"
+                        "Object\[\]|OrderedDictionary"
                         {
                             if ($entry.$property.Length -gt 0)
                             {
@@ -552,10 +560,22 @@ function ConvertFrom-DSCObject
                                 {
                                     if ($objectToTest.'CIMInstance')
                                     {
-                                        $subResult = ConvertFrom-DSCObject -DSCResources $entry.$property -ChildLevel ($ChildLevel + 2)
-                                        [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= @(")
-                                        [void]$results.AppendLine("$subResult")
-                                        [void]$results.AppendLine("$childSpacer    )")
+                                        if ($entry.$property.Length -gt 1)
+                                        {
+                                            $subResult = ConvertFrom-DSCObject -DSCResources $entry.$property -ChildLevel ($ChildLevel + 2)
+                                            # Remove carriage return from last line
+                                            $subResult = $subResult.Substring(0, $subResult.Length - 1)
+                                            [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= @(")
+                                            [void]$results.AppendLine("$subResult")
+                                            [void]$results.AppendLine("$childSpacer    )")
+                                        }
+                                        else
+                                        {
+                                            $subResult = ConvertFrom-DSCObject -DSCResources $entry.$property -ChildLevel ($ChildLevel + 1)
+                                            # Remove carriage return from last line and trim empty spaces before equal sign
+                                            $subResult = $subResult.Substring(0, $subResult.Length - 1).Trim()
+                                            [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= $subResult")
+                                        }
                                     }
                                 }
                                 else
