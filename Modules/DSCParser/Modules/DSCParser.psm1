@@ -75,8 +75,13 @@ function ConvertFrom-CIMInstanceToHashtable
 
         [Parameter(Mandatory = $true)]
         [System.String]
-        $ResourceName
+        $ResourceName,
+
+        [Parameter()]
+        [System.String]
+        $Schema
     )
+    $SchemaJSONObject = $null
     # Case we have an array of CIMInstances
     if ($ChildObject.GetType().Name -eq 'PipelineAst')
     {
@@ -85,7 +90,8 @@ function ConvertFrom-CIMInstanceToHashtable
         foreach ($statement in $statements)
         {
             $result += ConvertFrom-CIMInstanceToHashtable -ChildObject $statement `
-                                                          -ResourceName $ResourceName
+                                                          -ResourceName $ResourceName `
+                                                          -Schema $Schema
         }
     }
     else
@@ -97,55 +103,70 @@ function ConvertFrom-CIMInstanceToHashtable
             $KeyPairs = $ChildObject.CommandElements[$i*3-1].KeyValuePairs
             $CIMInstanceName = $ChildObject.CommandElements[($i-1)*3].Value
 
-            # Get the CimClass associated with the current CimInstanceName
-            $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
-                                           -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
-                                           -ErrorAction SilentlyContinue
-
-            if ($null -eq $CIMClassObject)
+            # If a schema definition isn't provided, use the CIM classes
+            # cmdlets to retrieve information about parameter types.
+            if ([System.String]::IsNullOrEmpty($Schema))
             {
-                $dscResourceInfo = Get-DSCResource -Name $ResourceName
-                $InvokeParams = @{
-                    Name        = $ResourceName
-                    Method      = 'Get'
-                    Property    = @{
-                        'dummyValue' = 'dummyValue'
-                    }
-                    ModuleName  = @{
-                        ModuleName    = $dscResourceInfo.ModuleName
-                        ModuleVersion = $dscResourceInfo.Version
-                    }
-                    ErrorAction = 'Stop'
-                }
+                # Get the CimClass associated with the current CimInstanceName
+                $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
+                                            -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                            -ErrorAction SilentlyContinue
 
-                try
+                if ($null -eq $CIMClassObject)
                 {
-                    Invoke-DscResource @InvokeParams -ErrorAction SilentlyContinue
-                
-                    $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
-                                           -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
-                                           -ErrorAction SilentlyContinue
+                    $dscResourceInfo = Get-DSCResource -Name $ResourceName
+                    $InvokeParams = @{
+                        Name        = $ResourceName
+                        Method      = 'Get'
+                        Property    = @{
+                            'dummyValue' = 'dummyValue'
+                        }
+                        ModuleName  = @{
+                            ModuleName    = $dscResourceInfo.ModuleName
+                            ModuleVersion = $dscResourceInfo.Version
+                        }
+                        ErrorAction = 'Stop'
+                    }
 
-                    $breaker = 5
-                    while ($null -eq $CIMCLassObject -and $breaker -gt 0)
+                    try
                     {
-                        Start-Sleep -Seconds 1
+                        Invoke-DscResource @InvokeParams -ErrorAction SilentlyContinue
+                    
                         $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
-                                           -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
-                                           -ErrorAction SilentlyContinue
-                        $breaker--
+                                            -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                            -ErrorAction SilentlyContinue
+
+                        $breaker = 5
+                        while ($null -eq $CIMCLassObject -and $breaker -gt 0)
+                        {
+                            Start-Sleep -Seconds 1
+                            $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
+                                            -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                            -ErrorAction SilentlyContinue
+                            $breaker--
+                        }
                     }
-                }
-                catch
-                {
-                    # We only care if the resource can't be found, not if it fails while executing
-                    if ($_.Exception.Message -match '(Resource \w+ was not found|The PowerShell DSC resource .+ does not exist at the PowerShell module path nor is it registered as a WMI DSC resource)')
+                    catch
                     {
-                        throw $_
+                        # We only care if the resource can't be found, not if it fails while executing
+                        if ($_.Exception.Message -match '(Resource \w+ was not found|The PowerShell DSC resource .+ does not exist at the PowerShell module path nor is it registered as a WMI DSC resource)')
+                        {
+                            throw $_
+                        }
                     }
                 }
+                $CIMClassProperties = $CIMClassObject.CimClassProperties
             }
-            $CIMClassProperties = $CIMClassObject.CimClassProperties
+            else
+            {
+                # Schema definition was provided.
+                if ($null -eq $SchemaJSONObject)
+                {
+                    $SchemaJSONObject = ConvertFrom-Json $Schema
+                }
+                $CIMClassObject = $SchemaJSONObject | Where-Object -FilterScript {$_.ClassName -eq $CIMInstanceName}
+                $CIMClassProperties = $CIMClassObject.Parameters
+            }
 
             $currentResult.Add("CIMInstance", $CIMInstanceName)
             foreach ($entry in $keyPairs)
@@ -182,7 +203,8 @@ function ConvertFrom-CIMInstanceToHashtable
                     foreach ($subItem in $subExpression)
                     {
                         $subResult += ConvertFrom-CIMInstanceToHashtable -ChildObject $subItem.Statements `
-                                                                         -ResourceName $ResourceName
+                                                                         -ResourceName $ResourceName `
+                                                                         -Schema $Schema
                     }
                     $currentResult.Add($entry.Item1.ToString(), $subResult)
                 }
@@ -192,13 +214,15 @@ function ConvertFrom-CIMInstanceToHashtable
                     $associatedCIMProperty.CIMType -eq 'InstanceArray')
                 {
                     $subResult = ConvertFrom-CIMInstanceToHashtable -ChildObject $entry.Item2 `
-                                                                    -ResourceName $ResourceName
+                                                                    -ResourceName $ResourceName `
+                                                                    -Schema $Schema
                     $currentResult.Add($entry.Item1.ToString(), $subResult)
                 }
                 else
                 {
                     if ($associatedCIMProperty.CIMType -ne 'string' -and `
-                        $associatedCIMProperty.CIMType -ne 'stringArray')
+                        $associatedCIMProperty.CIMType -ne 'stringArray' -and `
+                        $associatedCIMProperty.CIMType -ne 'string[]')
                     {
                         # Try to parse the value based on the retrieved type.
                         $scriptBlock = @"
@@ -248,7 +272,12 @@ function ConvertTo-DSCObject
         [Parameter(ParameterSetName = 'Path')]
         [Parameter(ParameterSetName = 'Content')]
         [System.Boolean]
-        $IncludeComments = $false
+        $IncludeComments = $false,
+
+        [Parameter(ParameterSetName = 'Path')]
+        [Parameter(ParameterSetName = 'Content')]
+        [System.String]
+        $Schema
     )
     $result = @()
     $Tokens      = $null
@@ -426,7 +455,8 @@ function ConvertTo-DSCObject
                 else
                 {
                     $value = ConvertFrom-CIMInstanceToHashtable -ChildObject $keyValuePair.Item2 `
-                                                                -ResourceName $resourceType
+                                                                -ResourceName $resourceType `
+                                                                -Schema $Schema
                 }
                 $currentResourceInfo.Add($key, $value) | Out-Null
             }
