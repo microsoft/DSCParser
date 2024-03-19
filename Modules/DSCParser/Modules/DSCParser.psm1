@@ -130,7 +130,7 @@ function ConvertFrom-CIMInstanceToHashtable
 
                     try
                     {
-                        Invoke-DscResource @InvokeParams -ErrorAction SilentlyContinue
+                        Invoke-DscResource @InvokeParams -ErrorAction SilentlyContinue | Out-Null
                     
                         $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
                                             -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
@@ -141,8 +141,8 @@ function ConvertFrom-CIMInstanceToHashtable
                         {
                             Start-Sleep -Seconds 1
                             $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
-                                            -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
-                                            -ErrorAction SilentlyContinue
+                                                           -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                                           -ErrorAction SilentlyContinue
                             $breaker--
                         }
                     }
@@ -335,7 +335,7 @@ function ConvertTo-DSCObject
 
             if (-not [System.String]::IsNullOrEmpty($moduleToLoad.ModuleVersion))
             {
-                $currentResources | Where-Object -FilterScript {$_.Version -eq $moduleToLoad.ModuleVersion}
+                $currentResources = $currentResources | Where-Object -FilterScript {$_.Version -eq $moduleToLoad.ModuleVersion}
             }
             $DSCResources += $currentResources
         }
