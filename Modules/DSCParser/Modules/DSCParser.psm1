@@ -79,7 +79,11 @@ function ConvertFrom-CIMInstanceToHashtable
 
         [Parameter()]
         [System.String]
-        $Schema
+        $Schema,
+
+        [Parameter()]
+        [System.Boolean]
+        $IncludeCIMInstanceInfo = $true
     )
     $SchemaJSONObject = $null
     # Case we have an array of CIMInstances
@@ -91,7 +95,8 @@ function ConvertFrom-CIMInstanceToHashtable
         {
             $result += ConvertFrom-CIMInstanceToHashtable -ChildObject $statement `
                                                           -ResourceName $ResourceName `
-                                                          -Schema $Schema
+                                                          -Schema $Schema `
+                                                          -IncludeCIMInstanceInfo $IncludeCIMInstanceInfo
         }
     }
     else
@@ -168,7 +173,10 @@ function ConvertFrom-CIMInstanceToHashtable
                 $CIMClassProperties = $CIMClassObject.Parameters
             }
 
-            $currentResult.Add("CIMInstance", $CIMInstanceName)
+            if ($IncludeCIMInstanceInfo)
+            {
+                $currentResult.Add("CIMInstance", $CIMInstanceName)
+            }
             foreach ($entry in $keyPairs)
             {
                 $associatedCIMProperty = $CIMClassProperties | Where-Object -FilterScript {$_.Name -eq $entry.Item1.ToString()}
@@ -204,7 +212,8 @@ function ConvertFrom-CIMInstanceToHashtable
                     {
                         $subResult += ConvertFrom-CIMInstanceToHashtable -ChildObject $subItem.Statements `
                                                                          -ResourceName $ResourceName `
-                                                                         -Schema $Schema
+                                                                         -Schema $Schema `
+                                                                         -IncludeCIMInstanceInfo $IncludeCIMInstanceInfo
                     }
                     $currentResult.Add($entry.Item1.ToString(), $subResult)
                 }
@@ -215,7 +224,8 @@ function ConvertFrom-CIMInstanceToHashtable
                 {
                     $subResult = ConvertFrom-CIMInstanceToHashtable -ChildObject $entry.Item2 `
                                                                     -ResourceName $ResourceName `
-                                                                    -Schema $Schema
+                                                                    -Schema $Schema `
+                                                                    -IncludeCIMInstanceInfo $IncludeCIMInstanceInfo
                     $currentResult.Add($entry.Item1.ToString(), $subResult)
                 }
                 else
@@ -277,7 +287,12 @@ function ConvertTo-DSCObject
         [Parameter(ParameterSetName = 'Path')]
         [Parameter(ParameterSetName = 'Content')]
         [System.String]
-        $Schema
+        $Schema,
+
+        [Parameter(ParameterSetName = 'Path')]
+        [Parameter(ParameterSetName = 'Content')]
+        [System.Boolean]
+        $IncludeCIMInstanceInfo = $true
     )
     $result = @()
     $Tokens      = $null
@@ -456,7 +471,8 @@ function ConvertTo-DSCObject
                 {
                     $value = ConvertFrom-CIMInstanceToHashtable -ChildObject $keyValuePair.Item2 `
                                                                 -ResourceName $resourceType `
-                                                                -Schema $Schema
+                                                                -Schema $Schema `
+                                                                -IncludeCIMInstanceInfo $IncludeCIMInstanceInfo
                 }
                 $currentResourceInfo.Add($key, $value) | Out-Null
             }
