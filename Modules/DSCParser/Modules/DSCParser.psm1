@@ -360,7 +360,14 @@ function ConvertTo-DSCObject
     # Body.ScriptBlock is the part after "Configuration <InstanceName> {"
     # EndBlock is the actual code within that Configuration block
     # Find the first DynamicKeywordStatement that has a word "Node" in it, find all "NamedBlockAst" elements, these are the DSC resource definitions
-    $resourceInstances = $Config.Body.ScriptBlock.EndBlock.Statements.Find({$Args[0].GetType().Name -eq 'DynamicKeywordStatementAst' -and $Args[0].CommandElements[0].StringConstantType -eq 'BareWord' -and $Args[0].CommandElements[0].Value -eq 'Node'}, $False).commandElements[2].ScriptBlock.Find({$Args[0].GetType().Name -eq 'NamedBlockAst'}, $False).Statements
+    try
+    {
+        $resourceInstances = $Config.Body.ScriptBlock.EndBlock.Statements.Find({$Args[0].GetType().Name -eq 'DynamicKeywordStatementAst' -and $Args[0].CommandElements[0].StringConstantType -eq 'BareWord' -and $Args[0].CommandElements[0].Value -eq 'Node'}, $False).commandElements[2].ScriptBlock.Find({$Args[0].GetType().Name -eq 'NamedBlockAst'}, $False).Statements
+    }
+    catch
+    {
+        $resourceInstances = $Config.Body.ScriptBlock.EndBlock.Statements | Where-Object -FilterScript {$_.CommandElements[0].Value -ne 'Import-DscResource'}
+    }        
 
     # Get the name of the configuration.
     $configurationName = $Config.InstanceName.Value
