@@ -442,7 +442,8 @@ function ConvertTo-DSCObject
                 # If the current property is not a CIMInstance
                 if (-not $valueType.StartsWith('[MSFT_') -and `
                     $valueType -ne '[string]' -and `
-                    $valueType -ne '[string[]]')
+                    $valueType -ne '[string[]]' -and `
+                    -not $isVariable)
                 {
                     # Try to parse the value based on the retrieved type.
                     $scriptBlock = @"
