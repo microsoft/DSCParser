@@ -457,7 +457,21 @@ function ConvertTo-DSCObject
                 }
                 elseif ($valueType -eq '[String]' -or $isVariable)
                 {
-                    $value = $value
+                    if ($isVariable -and [Boolean]::TryParse($value.TrimStart('$'), [ref][Boolean]))
+                    {
+                        if ($value -eq "`$true")
+                        {
+                            $value = $true
+                        }
+                        elseif ($value -eq "`$false")
+                        {
+                            $value = $false
+                        }
+                    }
+                    else
+                    {
+                        $value = $value
+                    }
                 }
                 elseif ($valueType -eq '[string[]]')
                 {
