@@ -463,7 +463,7 @@ function ConvertTo-DSCObject
                         {
                             $value = $true
                         }
-                        elseif ($value -eq "`$false")
+                        else
                         {
                             $value = $false
                         }
