@@ -130,12 +130,12 @@ function ConvertFrom-CIMInstanceToHashtable
                             ModuleName    = $dscResourceInfo.ModuleName
                             ModuleVersion = $dscResourceInfo.Version
                         }
-                        ErrorAction = 'Stop'
+                        ErrorAction = 'SilentlyContinue'
                     }
 
                     try
                     {
-                        Invoke-DscResource @InvokeParams -ErrorAction SilentlyContinue | Out-Null
+                        Invoke-DscResource @InvokeParams | Out-Null
                     
                         $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
                                             -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
