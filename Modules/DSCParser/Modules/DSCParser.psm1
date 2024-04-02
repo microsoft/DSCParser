@@ -130,12 +130,12 @@ function ConvertFrom-CIMInstanceToHashtable
                             ModuleName    = $dscResourceInfo.ModuleName
                             ModuleVersion = $dscResourceInfo.Version
                         }
-                        ErrorAction = 'Stop'
+                        ErrorAction = 'SilentlyContinue'
                     }
 
                     try
                     {
-                        Invoke-DscResource @InvokeParams -ErrorAction SilentlyContinue | Out-Null
+                        Invoke-DscResource @InvokeParams | Out-Null
                     
                         $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
                                             -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
@@ -487,7 +487,21 @@ function ConvertTo-DSCObject
                 }
                 elseif ($valueType -eq '[String]' -or $isVariable)
                 {
-                    $value = $value
+                    if ($isVariable -and [Boolean]::TryParse($value.TrimStart('$'), [ref][Boolean]))
+                    {
+                        if ($value -eq "`$true")
+                        {
+                            $value = $true
+                        }
+                        else
+                        {
+                            $value = $false
+                        }
+                    }
+                    else
+                    {
+                        $value = $value
+                    }
                 }
                 elseif ($valueType -eq '[string[]]')
                 {
