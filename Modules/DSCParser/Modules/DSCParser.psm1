@@ -366,7 +366,7 @@ function ConvertTo-DSCObject
     }
     catch
     {
-        $resourceInstances = $Config.Body.ScriptBlock.EndBlock.Statements | Where-Object -FilterScript {$_.CommandElements[0].Value -ne 'Import-DscResource'}
+        $resourceInstances = $Config.Body.ScriptBlock.EndBlock.Statements | Where-Object -FilterScript {$null -ne $_.CommandElements -and $_.CommandElements[0].Value -ne 'Import-DscResource'}
     }        
 
     # Get the name of the configuration.
@@ -406,14 +406,44 @@ function ConvertTo-DSCObject
                 {
                     if ($null -ne $keyValuePair.Item2.PipelineElements.Expression)
                     {
-                        $value = $keyValuePair.Item2.PipelineElements.Expression.ToString()
+                        if ($keyValuePair.Item2.PipelineElements.Expression.StaticType.Name -eq 'Object[]')
+                        {
+                            $value = $keyValuePair.Item2.PipelineElements.Expression.SubExpression
+                            $newValue = @()
+                            foreach ($expression in $value.Statements.PipelineElements.Expression)
+                            {
+                                if ($null -ne $expression.Elements)
+                                {
+                                    foreach ($element in $expression.Elements)
+                                    {
+                                        if ($null -ne $element.VariablePath)
+                                        {
+                                            $newValue += "`$" + $element.VariablePath.ToString()
+                                        }
+                                        elseif ($null -ne $element.Value)
+                                        {
+                                            $newValue += $element.Value
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    $newValue += $expression.Value
+                                }
+                            }
+                            $value = $newValue
+                        }
+                        else
+                        {
+                            $value = $keyValuePair.Item2.PipelineElements.Expression.ToString()
+                        }
                     }
                     else
                     {
                         $value = $keyValuePair.Item2.PipelineElements.Parent.ToString()
                     }
 
-                    if ($value.StartsWith('$'))
+                    if ($value.GetType().Name -eq 'String' -and $value.StartsWith('$'))
                     {
                         $isVariable = $true
                     }
@@ -464,15 +494,9 @@ function ConvertTo-DSCObject
                     # If the property is an array but there's only one value
                     # specified as a string (not specifying the @()) then
                     # we need to create the array.
-                    if (-not $value.StartsWith('@('))
+                    if ($value.GetType().Name -eq 'String' -and -not $value.StartsWith('@('))
                     {
                         $value = @($value)
-                    }
-                    else
-                    {
-                        # Try to parse the value based on the retrieved type.
-                        $scriptBlock = "`$value = $($value.Replace('$', '`$'))"
-                        Invoke-Expression -Command $scriptBlock | Out-Null
                     }
                 }
                 else
