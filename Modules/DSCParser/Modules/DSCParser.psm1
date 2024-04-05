@@ -222,11 +222,40 @@ function ConvertFrom-CIMInstanceToHashtable
                     $subExpression.ToString().StartsWith('MSFT_')) -or `
                     $associatedCIMProperty.CIMType -eq 'InstanceArray')
                 {
+                    $isArray = $false
+                    if ($entry.Item2.ToString().StartsWith('@('))
+                    {
+                        $isArray = $true
+                    }
                     $subResult = ConvertFrom-CIMInstanceToHashtable -ChildObject $entry.Item2 `
                                                                     -ResourceName $ResourceName `
                                                                     -Schema $Schema `
                                                                     -IncludeCIMInstanceInfo $IncludeCIMInstanceInfo
+                    if ($isArray)
+                    {
+                        $subResult = @($subResult)
+                    }
                     $currentResult.Add($entry.Item1.ToString(), $subResult)
+                }
+                elseif ($associatedCIMProperty.CIMType -eq 'stringArray' -or `
+                        $associatedCIMProperty.CIMType -eq 'string[]')
+                {
+                    $subExpression = $subExpression.ToString().Replace("',`"", "`r`n").Replace("`",'", "`r`n").Replace("`",`"", "`r`n").Replace("',`'", "`r`n").Replace("',", "`r`n").Replace("`"", "`r`n")
+                    $subExpression = (-split $subExpression).Trim("`"").Trim("'")
+                    $currentResult.Add($entry.Item1.ToString(), $subExpression)
+                }
+                elseif ($associatedCIMProperty.CIMType -eq 'boolean' -and `
+                        $subExpression.GetType().Name -eq 'string')
+                {
+                    if ($subExpression -eq "`$true")
+                    {
+                        $subExpression = $true
+                    }
+                    else
+                    {
+                        $subExpression = $false
+                    }
+                    $currentResult.Add($entry.Item1.ToString(), $subExpression)
                 }
                 else
                 {
@@ -514,11 +543,20 @@ function ConvertTo-DSCObject
                     }
                 }
                 else
-                {
+                {   
+                    $isArray = $false                
+                    if ($keyValuePair.Item2.ToString().StartsWith('@('))
+                    {
+                        $isArray = $true
+                    }
                     $value = ConvertFrom-CIMInstanceToHashtable -ChildObject $keyValuePair.Item2 `
                                                                 -ResourceName $resourceType `
                                                                 -Schema $Schema `
                                                                 -IncludeCIMInstanceInfo $IncludeCIMInstanceInfo
+                    if ($isArray)
+                    {
+                        $value = @($value)
+                    }
                 }
                 $currentResourceInfo.Add($key, $value) | Out-Null
             }
