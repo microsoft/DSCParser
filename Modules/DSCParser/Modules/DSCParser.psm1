@@ -11,6 +11,7 @@
         [Array]
         $ParsedObject
     )
+
     # Find the location of the Node token. This is to ensure
     # we only look at comments that come after.
     $i = 0
@@ -85,6 +86,7 @@ function ConvertFrom-CIMInstanceToHashtable
         [System.Boolean]
         $IncludeCIMInstanceInfo = $true
     )
+
     $SchemaJSONObject = $null
     # Case we have an array of CIMInstances
     if ($ChildObject.GetType().Name -eq 'PipelineAst')
@@ -323,6 +325,7 @@ function ConvertTo-DSCObject
         [System.Boolean]
         $IncludeCIMInstanceInfo = $true
     )
+
     $result = @()
     $Tokens      = $null
     $ParseErrors = $null
@@ -333,7 +336,7 @@ function ConvertTo-DSCObject
         $Content = Get-Content $Path -Raw
     }
     $AST = [System.Management.Automation.Language.Parser]::ParseInput($Content, [ref]$Tokens, [ref]$ParseErrors)
-    
+
     # Look up the Configuration definition ("")
     $Config = $AST.Find({$Args[0].GetType().Name -eq 'ConfigurationDefinitionAst'}, $False)
 
@@ -350,7 +353,7 @@ function ConvertTo-DSCObject
             {
                 if ($statement.CommandElements[$i].ParameterName -eq 'ModuleName' -and `
                     ($i+1) -lt $statement.CommandElements.Count)
-                {         
+                {
                     $moduleName = $statement.CommandElements[$i+1].Value      
                     $currentModule.Add('ModuleName', $moduleName)
                 }
@@ -396,7 +399,7 @@ function ConvertTo-DSCObject
     catch
     {
         $resourceInstances = $Config.Body.ScriptBlock.EndBlock.Statements | Where-Object -FilterScript {$null -ne $_.CommandElements -and $_.CommandElements[0].Value -ne 'Import-DscResource'}
-    }        
+    }
 
     # Get the name of the configuration.
     $configurationName = $Config.InstanceName.Value
@@ -543,8 +546,8 @@ function ConvertTo-DSCObject
                     }
                 }
                 else
-                {   
-                    $isArray = $false                
+                {
+                    $isArray = $false
                     if ($keyValuePair.Item2.ToString().StartsWith('@('))
                     {
                         $isArray = $true
