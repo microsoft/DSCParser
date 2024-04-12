@@ -1,4 +1,4 @@
-﻿function Update-DSCResultWithMetadata
+function Update-DSCResultWithMetadata
 {
     [CmdletBinding()]
     [OutputType([Array])]
@@ -39,23 +39,27 @@
             $commentResourceInstanceName = $tokens[$i-$stepback + 1].Value
 
             # Backtrack to find what property it is associated with.
-            $stepback = 1
+            $stepback = 0
             do
             {
                 $stepback++
-            } while ($tokens[$i-$stepback].Kind -ne 'Identifier')
-            $commentAssociatedProperty = $tokens[$i-$stepback].Text
-
-            # Loop through all instances in the ParsedObject to retrieve
-            # the one associated with the comment.
-            for ($j = 0; $j -le $ParsedObject.Length; $j++)
-            {
-                if ($ParsedObject[$j].ResourceName -eq $commentResourceType -and `
-                    $ParsedObject[$j].ResourceInstanceName -eq $commentResourceInstanceName -and `
-                    $ParsedObject[$j].Keys.Contains($commentAssociatedProperty))
-                {
-                    $ParsedObject[$j].Add("_metadata_$commentAssociatedProperty", $tokens[$i].Text)
-                }
+            } while ($tokens[$i-$stepback].Kind -ne 'Identifier' -and $tokens[$i-$stepback].Kind -ne 'NewLine')
+            if ($tokens[$i-$stepback].Kind -eq 'Identifier') {
+              $commentAssociatedProperty = $tokens[$i-$stepback].Text
+  
+              # Loop through all instances in the ParsedObject to retrieve
+              # the one associated with the comment.
+              for ($j = 0; $j -le $ParsedObject.Length; $j++)
+              {
+                  if ($ParsedObject[$j].ResourceName -eq $commentResourceType -and `
+                      $ParsedObject[$j].ResourceInstanceName -eq $commentResourceInstanceName -and `
+                      $ParsedObject[$j].Keys.Contains($commentAssociatedProperty))
+                  {
+                      $ParsedObject[$j].Add("_metadata_$commentAssociatedProperty", $tokens[$i].Text)
+                  }
+              }
+            } Else {
+              # This is a comment on a separate line, not associated with a property
             }
         }
     }
