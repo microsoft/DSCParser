@@ -11,6 +11,7 @@
         [Array]
         $ParsedObject
     )
+
     # Find the location of the Node token. This is to ensure
     # we only look at comments that come after.
     $i = 0
@@ -85,6 +86,7 @@ function ConvertFrom-CIMInstanceToHashtable
         [System.Boolean]
         $IncludeCIMInstanceInfo = $true
     )
+
     $SchemaJSONObject = $null
     # Case we have an array of CIMInstances
     if ($ChildObject.GetType().Name -eq 'PipelineAst')
@@ -222,11 +224,40 @@ function ConvertFrom-CIMInstanceToHashtable
                     $subExpression.ToString().StartsWith('MSFT_')) -or `
                     $associatedCIMProperty.CIMType -eq 'InstanceArray')
                 {
+                    $isArray = $false
+                    if ($entry.Item2.ToString().StartsWith('@('))
+                    {
+                        $isArray = $true
+                    }
                     $subResult = ConvertFrom-CIMInstanceToHashtable -ChildObject $entry.Item2 `
                                                                     -ResourceName $ResourceName `
                                                                     -Schema $Schema `
                                                                     -IncludeCIMInstanceInfo $IncludeCIMInstanceInfo
+                    if ($isArray)
+                    {
+                        $subResult = @($subResult)
+                    }
                     $currentResult.Add($entry.Item1.ToString(), $subResult)
+                }
+                elseif ($associatedCIMProperty.CIMType -eq 'stringArray' -or `
+                        $associatedCIMProperty.CIMType -eq 'string[]')
+                {
+                    $subExpression = $subExpression.ToString().Replace("',`"", "`r`n").Replace("`",'", "`r`n").Replace("`",`"", "`r`n").Replace("',`'", "`r`n").Replace("',", "`r`n").Replace("`"", "`r`n")
+                    $subExpression = (-split $subExpression).Trim("`"").Trim("'")
+                    $currentResult.Add($entry.Item1.ToString(), $subExpression)
+                }
+                elseif ($associatedCIMProperty.CIMType -eq 'boolean' -and `
+                        $subExpression.GetType().Name -eq 'string')
+                {
+                    if ($subExpression -eq "`$true")
+                    {
+                        $subExpression = $true
+                    }
+                    else
+                    {
+                        $subExpression = $false
+                    }
+                    $currentResult.Add($entry.Item1.ToString(), $subExpression)
                 }
                 else
                 {
@@ -294,6 +325,7 @@ function ConvertTo-DSCObject
         [System.Boolean]
         $IncludeCIMInstanceInfo = $true
     )
+
     $result = @()
     $Tokens      = $null
     $ParseErrors = $null
@@ -304,7 +336,7 @@ function ConvertTo-DSCObject
         $Content = Get-Content $Path -Raw
     }
     $AST = [System.Management.Automation.Language.Parser]::ParseInput($Content, [ref]$Tokens, [ref]$ParseErrors)
-    
+
     # Look up the Configuration definition ("")
     $Config = $AST.Find({$Args[0].GetType().Name -eq 'ConfigurationDefinitionAst'}, $False)
 
@@ -321,7 +353,7 @@ function ConvertTo-DSCObject
             {
                 if ($statement.CommandElements[$i].ParameterName -eq 'ModuleName' -and `
                     ($i+1) -lt $statement.CommandElements.Count)
-                {         
+                {
                     $moduleName = $statement.CommandElements[$i+1].Value      
                     $currentModule.Add('ModuleName', $moduleName)
                 }
@@ -367,7 +399,7 @@ function ConvertTo-DSCObject
     catch
     {
         $resourceInstances = $Config.Body.ScriptBlock.EndBlock.Statements | Where-Object -FilterScript {$null -ne $_.CommandElements -and $_.CommandElements[0].Value -ne 'Import-DscResource'}
-    }        
+    }
 
     # Get the name of the configuration.
     $configurationName = $Config.InstanceName.Value
@@ -515,10 +547,19 @@ function ConvertTo-DSCObject
                 }
                 else
                 {
+                    $isArray = $false
+                    if ($keyValuePair.Item2.ToString().StartsWith('@('))
+                    {
+                        $isArray = $true
+                    }
                     $value = ConvertFrom-CIMInstanceToHashtable -ChildObject $keyValuePair.Item2 `
                                                                 -ResourceName $resourceType `
                                                                 -Schema $Schema `
                                                                 -IncludeCIMInstanceInfo $IncludeCIMInstanceInfo
+                    if ($isArray)
+                    {
+                        $value = @($value)
+                    }
                 }
                 $currentResourceInfo.Add($key, $value) | Out-Null
             }
