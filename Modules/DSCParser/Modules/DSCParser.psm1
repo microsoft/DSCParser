@@ -1,4 +1,4 @@
-﻿function Update-DSCResultWithMetadata
+function Update-DSCResultWithMetadata
 {
     [CmdletBinding()]
     [OutputType([Array])]
@@ -23,7 +23,7 @@
 
     for ($i = $tokenPositionOfNode; $i -le $tokens.Length; $i++)
     {
-        $percent = ($i / ($tokens.Length - $tokenPositionOfNode) * 100)
+        $percent = (($i - $tokenPositionOfNode) / ($tokens.Length - $tokenPositionOfNode) * 100)
         Write-Progress -Status "Processing $percent%" `
                        -Activity "Parsing Comments" `
                        -PercentComplete $percent
