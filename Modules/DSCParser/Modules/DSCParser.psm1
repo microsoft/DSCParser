@@ -1,4 +1,4 @@
-function Update-DSCResultWithMetadata
+﻿function Update-DSCResultWithMetadata
 {
     [CmdletBinding()]
     [OutputType([Array])]
@@ -339,6 +339,42 @@ function ConvertTo-DSCObject
     {
         $Content = Get-Content $Path -Raw
     }
+
+    # Remove the module version information.
+    $start = $Content.ToLower().IndexOf('import-dscresource')
+    if ($start -ge 0)
+    {
+        $end = $Content.IndexOf("`n", $start)
+        if ($end -gt $start)
+        {
+            $start = $Content.ToLower().IndexOf("-moduleversion", $start)
+            if ($start -ge 0 -and $start -lt $end)
+            {
+                $Content = $Content.Remove($start, $end-$start)
+            }
+        }
+    }
+
+    # Rename the configuration node to ensure a valid name is used.
+    $start = $Content.ToLower().IndexOf("`nconfiguration")
+    if ($start -lt 0)
+    {
+        $start = $Content.ToLower().IndexOf(' configuration ')
+    }
+    if ($start -ge 0)
+    {
+        $end = $Content.IndexOf("`r`n", $start)
+        if ($end -gt $start)
+        {
+            $start = $Content.ToLower().IndexOf(' ', $start+1)
+            if ($start -ge 0 -and $start -lt $end)
+            {
+                $Content = $Content.Remove($start, $end-$start)
+                $Content = $Content.Insert($start, " TempDSCParserConfiguration")
+            }
+        }
+    }
+
     $AST = [System.Management.Automation.Language.Parser]::ParseInput($Content, [ref]$Tokens, [ref]$ParseErrors)
 
     # Look up the Configuration definition ("")
