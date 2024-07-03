@@ -246,8 +246,7 @@ function ConvertFrom-CIMInstanceToHashtable
                 elseif ($associatedCIMProperty.CIMType -eq 'stringArray' -or `
                         $associatedCIMProperty.CIMType -eq 'string[]')
                 {
-                    $subExpression = $subExpression.ToString().Replace("',`"", "`r`n").Replace("`",'", "`r`n").Replace("`",`"", "`r`n").Replace("',`'", "`r`n").Replace("',", "`r`n").Replace("`"", "`r`n")
-                    $subExpression = (-split $subExpression).Trim("`"").Trim("'")
+                    $subExpression = ($subExpression.ToString() -split ",").Trim("`"").Trim("'")
                     $currentResult.Add($entry.Item1.ToString(), $subExpression)
                 }
                 elseif ($associatedCIMProperty.CIMType -eq 'boolean' -and `
