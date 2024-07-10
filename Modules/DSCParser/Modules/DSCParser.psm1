@@ -246,8 +246,66 @@ function ConvertFrom-CIMInstanceToHashtable
                 elseif ($associatedCIMProperty.CIMType -eq 'stringArray' -or `
                         $associatedCIMProperty.CIMType -eq 'string[]')
                 {
-                    $subExpression = ($subExpression.ToString() -split ",").Trim("`"").Trim("'")
-                    $currentResult.Add($entry.Item1.ToString(), $subExpression)
+                    if ($subExpression -is [System.String])
+                    {
+                        if ($subExpression.ToString() -match "\s*@\(\s*\)\s*")
+                        {
+                            $currentResult.Add($entry.Item1.ToString(), @())
+                        }
+                        else
+                        {
+                            $regex = "'\s*,\s*'|`"\s*,\s*'|'\s*,\s*`"|`"\s*,\s*`""
+                            [array]$regexResult = [Regex]::Split($subExpression, $regex)
+
+                            for ($i = 0; $i -lt $regexResult.Count; $i++)
+                            { 
+                                $regexResult[$i] = $regexResult[$i].Trim().Trim("'").Trim('"')
+                            }
+
+                            $currentResult.Add($entry.Item1.ToString(), $regexResult)
+                        }
+                    }
+                    else
+                    {
+                        $convertedFromString = $subExpression.ToString() | ConvertFrom-String -Delimiter ","
+                        if ([String]::IsNullOrEmpty($convertedFromString))
+                        {
+                            $convertedFromString = $subExpression.ToString() | ConvertFrom-String -Delimiter "`n"
+                        }
+ 
+                        if ([String]::IsNullOrEmpty($convertedFromString))
+                        {
+                            $convertedFromString = $subExpression.ToString() | ConvertFrom-String -Delimiter "`r`n"
+                        }
+ 
+                        if ([String]::IsNullOrEmpty($convertedFromString))
+                        {
+                            $convertedFromString = $subExpression.ToString() | ConvertFrom-String
+                        }
+ 
+                        if (-not [String]::IsNullOrEmpty($convertedFromString))
+                        {
+                            $definitions = ($convertedFromString | Get-Member | ?{ $_.Name -match "P\d+" }).Definition
+                            $subExpression = @()
+                            foreach ($definition in $definitions)
+                            {
+                                $subExpression += $definition.Split("=")[1].Trim().Trim("`"").Trim("'")
+                            }
+                        }
+                        else
+                        {
+                            $subExpression = $subExpression.ToString().Trim().Trim("`"").Trim("'")
+                        }
+ 
+                        if ($subExpression.Count -eq 1)
+                        {
+                            $currentResult.Add($entry.Item1.ToString(), $subExpression)
+                        }
+                        else
+                        {
+                            $currentResult.Add($entry.Item1.ToString(), @($subExpression))
+                        }
+                    }
                 }
                 elseif ($associatedCIMProperty.CIMType -eq 'boolean' -and `
                         $subExpression.GetType().Name -eq 'string')
