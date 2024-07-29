@@ -1,4 +1,11 @@
-﻿function Update-DSCResultWithMetadata
+﻿$Script:IsPowerShellCore = $PSVersionTable.PSEdition -eq 'Core'
+
+if ($Script:IsPowerShellCore)
+{
+    Import-Module -Name 'PSDesiredStateConfiguration' -MinimumVersion 2.0.7 -Prefix 'Pwsh'
+}
+
+function Update-DSCResultWithMetadata
 {
     [CmdletBinding()]
     [OutputType([Array])]
@@ -47,7 +54,7 @@
             } while ($tokens[$i-$stepback].Kind -ne 'Identifier' -and $tokens[$i-$stepback].Kind -ne 'NewLine')
             if ($tokens[$i-$stepback].Kind -eq 'Identifier') {
               $commentAssociatedProperty = $tokens[$i-$stepback].Text
-  
+
               # Loop through all instances in the ParsedObject to retrieve
               # the one associated with the comment.
               for ($j = 0; $j -le $ParsedObject.Length; $j++)
@@ -125,7 +132,14 @@ function ConvertFrom-CIMInstanceToHashtable
 
                 if ($null -eq $CIMClassObject)
                 {
-                    $dscResourceInfo = Get-DSCResource -Name $ResourceName
+                    if ($Script:IsPowerShellCore)
+                    {
+                        $dscResourceInfo = Get-PwshDscResource -Name $ResourceName
+                    }
+                    else
+                    {
+                        $dscResourceInfo = Get-DscResource -Name $ResourceName
+                    }
                     $InvokeParams = @{
                         Name        = $ResourceName
                         Method      = 'Get'
@@ -142,7 +156,7 @@ function ConvertFrom-CIMInstanceToHashtable
                     try
                     {
                         Invoke-DscResource @InvokeParams | Out-Null
-                    
+
                         $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
                                             -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
                                             -ErrorAction SilentlyContinue
@@ -258,7 +272,7 @@ function ConvertFrom-CIMInstanceToHashtable
                             [array]$regexResult = [Regex]::Split($subExpression, $regex)
 
                             for ($i = 0; $i -lt $regexResult.Count; $i++)
-                            { 
+                            {
                                 $regexResult[$i] = $regexResult[$i].Trim().Trim("'").Trim('"')
                             }
 
@@ -272,20 +286,20 @@ function ConvertFrom-CIMInstanceToHashtable
                         {
                             $convertedFromString = $subExpression.ToString() | ConvertFrom-String -Delimiter "`n"
                         }
- 
+
                         if ([String]::IsNullOrEmpty($convertedFromString))
                         {
                             $convertedFromString = $subExpression.ToString() | ConvertFrom-String -Delimiter "`r`n"
                         }
- 
+
                         if ([String]::IsNullOrEmpty($convertedFromString))
                         {
                             $convertedFromString = $subExpression.ToString() | ConvertFrom-String
                         }
- 
+
                         if (-not [String]::IsNullOrEmpty($convertedFromString))
                         {
-                            $definitions = ($convertedFromString | Get-Member | ?{ $_.Name -match "P\d+" }).Definition
+                            $definitions = ($convertedFromString | Get-Member | Where-Object -FilterScript { $_.Name -match "P\d+" }).Definition
                             $subExpression = @()
                             foreach ($definition in $definitions)
                             {
@@ -296,7 +310,7 @@ function ConvertFrom-CIMInstanceToHashtable
                         {
                             $subExpression = $subExpression.ToString().Trim().Trim("`"").Trim("'")
                         }
- 
+
                         if ($subExpression.Count -eq 1)
                         {
                             $currentResult.Add($entry.Item1.ToString(), $subExpression)
@@ -451,13 +465,13 @@ function ConvertTo-DSCObject
                 if ($statement.CommandElements[$i].ParameterName -eq 'ModuleName' -and `
                     ($i+1) -lt $statement.CommandElements.Count)
                 {
-                    $moduleName = $statement.CommandElements[$i+1].Value      
+                    $moduleName = $statement.CommandElements[$i+1].Value
                     $currentModule.Add('ModuleName', $moduleName)
                 }
                 elseif ($statement.CommandElements[$i].ParameterName -eq 'ModuleVersion' -and `
                     ($i+1) -lt $statement.CommandElements.Count)
                 {
-                    $moduleVersion = $statement.CommandElements[$i+1].Value 
+                    $moduleVersion = $statement.CommandElements[$i+1].Value
                     $currentModule.Add('ModuleVersion', $moduleVersion)
                 }
             }
@@ -468,14 +482,21 @@ function ConvertTo-DSCObject
     foreach ($moduleToLoad in $ModulesToLoad)
     {
         $loadedModuleTest = Get-Module -Name $moduleToLoad.ModuleName -ListAvailable | Where-Object -FilterScript {$_.Version -eq $moduleToLoad.ModuleVersion}
-        
+
         if ($null -eq $loadedModuleTest -and -not [System.String]::IsNullOrEmpty($moduleToLoad.ModuleVersion))
         {
             throw "Module {$($moduleToLoad.ModuleName)} version {$($moduleToLoad.ModuleVersion)} specified in the configuration isn't installed on the machine/agent. Install it by running: Install-Module -Name '$($moduleToLoad.ModuleName)' -RequiredVersion '$($moduleToLoad.ModuleVersion)'"
         }
         else
         {
-            $currentResources = Get-DSCResource -Module $moduleToLoad.ModuleName
+            if ($Script:IsPowerShellCore)
+            {
+                $currentResources = Get-PwshDscResource -Module $moduleToLoad.ModuleName
+            }
+            else
+            {
+                $currentResources = Get-DSCResource -Module $moduleToLoad.ModuleName
+            }
 
             if (-not [System.String]::IsNullOrEmpty($moduleToLoad.ModuleVersion))
             {
@@ -661,7 +682,7 @@ function ConvertTo-DSCObject
                 $currentResourceInfo.Add($key, $value) | Out-Null
             }
         }
-        
+
         $result += $currentResourceInfo
         $totalCount++
     }
