@@ -434,7 +434,7 @@ function ConvertTo-DSCObject
     }
     if ($start -ge 0)
     {
-        $end = $Content.IndexOf("`r`n", $start)
+        $end = $Content.IndexOf("`n", $start)
         if ($end -gt $start)
         {
             $start = $Content.ToLower().IndexOf(' ', $start+1)
