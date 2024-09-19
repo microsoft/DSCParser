@@ -153,36 +153,45 @@ function ConvertFrom-CIMInstanceToHashtable
                         ErrorAction = 'Stop'
                     }
 
-                    try
+                    do
                     {
-                        Invoke-DscResource @InvokeParams | Out-Null
-
-                        $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
-                                            -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
-                                            -ErrorAction SilentlyContinue
-
-                        $breaker = 5
-                        while ($null -eq $CIMCLassObject -and $breaker -gt 0)
+                        $firstTry = $true
+                        try
                         {
-                            Start-Sleep -Seconds 1
+                            Invoke-DscResource @InvokeParams | Out-Null
+                            $firstTry = $false
+
                             $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
-                                                           -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
-                                                           -ErrorAction SilentlyContinue
-                            $breaker--
+                                                -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                                -ErrorAction SilentlyContinue
+
+                            $breaker = 5
+                            while ($null -eq $CIMCLassObject -and $breaker -gt 0)
+                            {
+                                Start-Sleep -Seconds 1
+                                $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
+                                                            -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                                            -ErrorAction SilentlyContinue
+                                $breaker--
+                            }
                         }
-                    }
-                    catch
-                    {
-                        if ($_.CategoryInfo.Category -eq 'PermissionDenied')
+                        catch
                         {
-                            throw "The CIM class $CimInstanceName is not available or could not be instantiated. Please run this command with administrative privileges."
+                            if ($firstTry)
+                            {
+                                $InvokeParams.ErrorAction = 'SilentlyContinue'
+                            }
+                            if ($_.CategoryInfo.Category -eq 'PermissionDenied')
+                            {
+                                throw "The CIM class $CimInstanceName is not available or could not be instantiated. Please run this command with administrative privileges."
+                            }
+                            # We only care if the resource can't be found, not if it fails while executing
+                            if ($_.Exception.Message -match '(Resource \w+ was not found|The PowerShell DSC resource .+ does not exist at the PowerShell module path nor is it registered as a WMI DSC resource)')
+                            {
+                                throw $_
+                            }
                         }
-                        # We only care if the resource can't be found, not if it fails while executing
-                        if ($_.Exception.Message -match '(Resource \w+ was not found|The PowerShell DSC resource .+ does not exist at the PowerShell module path nor is it registered as a WMI DSC resource)')
-                        {
-                            throw $_
-                        }
-                    }
+                    } while ($firstTry)
                 }
                 $CIMClassProperties = $CIMClassObject.CimClassProperties
             }
