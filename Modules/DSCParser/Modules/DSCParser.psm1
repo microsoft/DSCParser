@@ -125,8 +125,8 @@ function ConvertFrom-CIMInstanceToHashtable
             # cmdlets to retrieve information about parameter types.
             if ([System.String]::IsNullOrEmpty($Schema))
             {
-                # Get the CimClass associated with the current CimInstanceName
-                $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
+                # Get the CimClass associated with the current CIMInstanceName
+                $CIMClassObject = Get-CimClass -ClassName $CIMInstanceName `
                                             -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
                                             -ErrorAction SilentlyContinue
 
@@ -150,35 +150,48 @@ function ConvertFrom-CIMInstanceToHashtable
                             ModuleName    = $dscResourceInfo.ModuleName
                             ModuleVersion = $dscResourceInfo.Version
                         }
-                        ErrorAction = 'SilentlyContinue'
+                        ErrorAction = 'Stop'
                     }
 
-                    try
+                    do
                     {
-                        Invoke-DscResource @InvokeParams | Out-Null
-
-                        $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
-                                            -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
-                                            -ErrorAction SilentlyContinue
-
-                        $breaker = 5
-                        while ($null -eq $CIMCLassObject -and $breaker -gt 0)
+                        $firstTry = $true
+                        try
                         {
-                            Start-Sleep -Seconds 1
+                            Invoke-DscResource @InvokeParams | Out-Null
+                            $firstTry = $false
+
                             $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
-                                                           -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
-                                                           -ErrorAction SilentlyContinue
-                            $breaker--
+                                                -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                                -ErrorAction SilentlyContinue
+
+                            $breaker = 5
+                            while ($null -eq $CIMCLassObject -and $breaker -gt 0)
+                            {
+                                Start-Sleep -Seconds 1
+                                $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
+                                                            -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                                            -ErrorAction SilentlyContinue
+                                $breaker--
+                            }
                         }
-                    }
-                    catch
-                    {
-                        # We only care if the resource can't be found, not if it fails while executing
-                        if ($_.Exception.Message -match '(Resource \w+ was not found|The PowerShell DSC resource .+ does not exist at the PowerShell module path nor is it registered as a WMI DSC resource)')
+                        catch
                         {
-                            throw $_
+                            if ($firstTry)
+                            {
+                                $InvokeParams.ErrorAction = 'SilentlyContinue'
+                            }
+                            if ($_.CategoryInfo.Category -eq 'PermissionDenied')
+                            {
+                                throw "The CIM class $CimInstanceName is not available or could not be instantiated. Please run this command with administrative privileges."
+                            }
+                            # We only care if the resource can't be found, not if it fails while executing
+                            if ($_.Exception.Message -match '(Resource \w+ was not found|The PowerShell DSC resource .+ does not exist at the PowerShell module path nor is it registered as a WMI DSC resource)')
+                            {
+                                throw $_
+                            }
                         }
-                    }
+                    } while ($firstTry)
                 }
                 $CIMClassProperties = $CIMClassObject.CimClassProperties
             }
@@ -434,7 +447,8 @@ function ConvertTo-DSCObject
     }
     if ($start -ge 0)
     {
-        $end = $Content.IndexOf("`n", $start)
+        # Prevent taking the new line from before 'configuration'
+        $end = $Content.IndexOf("`n", $start+1)
         if ($end -gt $start)
         {
             $start = $Content.ToLower().IndexOf(' ', $start+1)
