@@ -284,9 +284,9 @@ function ConvertFrom-CIMInstanceToHashtable
                             $regex = "'\s*,\s*'|`"\s*,\s*'|'\s*,\s*`"|`"\s*,\s*`""
                             [array]$regexResult = [Regex]::Split($subExpression, $regex)
 
-                            for ($i = 0; $i -lt $regexResult.Count; $i++)
+                            for ($j = 0; $j -lt $regexResult.Count; $j++)
                             {
-                                $regexResult[$i] = $regexResult[$i].Trim().Trim("'").Trim('"')
+                                $regexResult[$j] = $regexResult[$j].Trim().Trim("'").Trim('"')
                             }
 
                             $currentResult.Add($entry.Item1.ToString(), $regexResult)
