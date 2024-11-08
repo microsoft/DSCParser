@@ -656,7 +656,7 @@ function ConvertTo-DSCObject
                     {
                         $valueType = "[Int32]"
                     }
-                    elseif ($valueType -eq "SInt32Array")
+                    elseif ($valueType -eq "[SInt32Array]")
                     {
                         $valueType = "[Int32[]]"
                     }
