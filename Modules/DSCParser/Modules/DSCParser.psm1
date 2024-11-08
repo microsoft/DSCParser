@@ -353,12 +353,24 @@ function ConvertFrom-CIMInstanceToHashtable
                         $associatedCIMProperty.CIMType -ne 'stringArray' -and `
                         $associatedCIMProperty.CIMType -ne 'string[]')
                     {
+                        $valueType = $associatedCIMProperty.CIMType
+
+                        # SInt32{Array} are WMI data types that PowerShell doesn't have so it requires this workaround
+                        if ($valueType -eq "SInt32")
+                        {
+                            $valueType = "Int32"
+                        }
+                        elseif ($valueType -eq "SInt32Array")
+                        {
+                            $valueType = "Int32[]"
+                        }
+
                         # Try to parse the value based on the retrieved type.
                         $scriptBlock = @"
-                                        `$typeStaticMethods = [$($associatedCIMProperty.CIMType)] | gm -static
+                                        `$typeStaticMethods = [$($valueType)] | gm -static
                                         if (`$typeStaticMethods.Name.Contains('TryParse'))
                                         {
-                                            [$($associatedCIMProperty.CIMType)]::TryParse(`$subExpression, [ref]`$subExpression) | Out-Null
+                                            [$($valueType)]::TryParse(`$subExpression, [ref]`$subExpression) | Out-Null
                                         }
 "@
                         Invoke-Expression -Command $scriptBlock | Out-Null
@@ -639,6 +651,16 @@ function ConvertTo-DSCObject
                     $valueType -ne '[string[]]' -and `
                     -not $isVariable)
                 {
+                    # SInt32{Array} are WMI data types that PowerShell doesn't have so it requires this workaround
+                    if ($valueType -eq "[SInt32]")
+                    {
+                        $valueType = "[Int32]"
+                    }
+                    elseif ($valueType -eq "SInt32Array")
+                    {
+                        $valueType = "[Int32[]]"
+                    }
+
                     # Try to parse the value based on the retrieved type.
                     $scriptBlock = @"
                                     `$typeStaticMethods = $valueType | gm -static
