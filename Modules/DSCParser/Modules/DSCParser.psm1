@@ -359,7 +359,7 @@ function ConvertFrom-CIMInstanceToHashtable
                     {
                         $valueType = $associatedCIMProperty.CIMType
 
-                        # SInt32 is a WMI data types that PowerShell doesn't have so it requires this workaround
+                        # SInt32 is a WMI data type that PowerShell doesn't have so it requires this workaround
                         if ($valueType -eq "SInt32")
                         {
                             $valueType = "Int32"
@@ -651,7 +651,7 @@ function ConvertTo-DSCObject
                     $valueType -ne '[string[]]' -and `
                     -not $isVariable)
                 {
-                    # SInt32 is a WMI data types that PowerShell doesn't have so it requires this workaround
+                    # SInt32 is a WMI data type that PowerShell doesn't have so it requires this workaround
                     if ($valueType -eq "[SInt32]")
                     {
                         $valueType = "[Int32]"
