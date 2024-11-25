@@ -451,27 +451,6 @@ function ConvertTo-DSCObject
         }
     }
 
-    # Rename the configuration node to ensure a valid name is used.
-    $start = $Content.ToLower().IndexOf("`nconfiguration")
-    if ($start -lt 0)
-    {
-        $start = $Content.ToLower().IndexOf(' configuration ')
-    }
-    if ($start -ge 0)
-    {
-        # Prevent taking the new line from before 'configuration'
-        $end = $Content.IndexOf("`n", $start+1)
-        if ($end -gt $start)
-        {
-            $start = $Content.ToLower().IndexOf(' ', $start+1)
-            if ($start -ge 0 -and $start -lt $end)
-            {
-                $Content = $Content.Remove($start, $end-$start)
-                $Content = $Content.Insert($start, " TempDSCParserConfiguration")
-            }
-        }
-    }
-
     $AST = [System.Management.Automation.Language.Parser]::ParseInput($Content, [ref]$Tokens, [ref]$ParseErrors)
 
     # Look up the Configuration definition ("")
