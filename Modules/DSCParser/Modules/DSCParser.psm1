@@ -466,10 +466,10 @@ function ConvertTo-DSCObject
     {
         if ($parseError -like "Could not find the module*" -or $parseError -like "Undefined DSC resource*")
         {
-            continue
+            Write-Warning -Message "$($errorPrefix)Failed to find module or DSC resource: $parseError"
         }
 
-        Write-Warning -Message "$($errorPrefix)Error parsing configuration: $parseError"
+        throw "$($errorPrefix)Error parsing configuration: $parseError"
     }
 
     # Look up the Configuration definition ("")
