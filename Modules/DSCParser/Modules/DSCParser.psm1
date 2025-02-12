@@ -438,8 +438,10 @@ function ConvertTo-DSCObject
     $ParseErrors = $null
 
     # Use the AST to parse the DSC configuration
+    $errorPrefix = ""
     if (-not [System.String]::IsNullOrEmpty($Path) -and [System.String]::IsNullOrEmpty($Content))
     {
+        $errorPrefix = "$Path - "
         $Content = Get-Content $Path -Raw
     }
 
@@ -459,6 +461,16 @@ function ConvertTo-DSCObject
     }
 
     $AST = [System.Management.Automation.Language.Parser]::ParseInput($Content, [ref]$Tokens, [ref]$ParseErrors)
+
+    foreach ($parseError in $ParseErrors)
+    {
+        if ($parseError -like "Could not find the module*" -or $parseError -like "Undefined DSC resource*")
+        {
+            Write-Warning -Message "$($errorPrefix)Failed to find module or DSC resource: $parseError"
+        }
+
+        throw "$($errorPrefix)Error parsing configuration: $parseError"
+    }
 
     # Look up the Configuration definition ("")
     $Config = $AST.Find({$Args[0].GetType().Name -eq 'ConfigurationDefinitionAst'}, $False)
