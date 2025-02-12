@@ -365,15 +365,22 @@ function ConvertFrom-CIMInstanceToHashtable
                             $valueType = "Int32"
                         }
 
-                        # Try to parse the value based on the retrieved type.
-                        $scriptBlock = @"
-                                        `$typeStaticMethods = [$($valueType)] | gm -static
-                                        if (`$typeStaticMethods.Name.Contains('TryParse'))
-                                        {
-                                            [$($valueType)]::TryParse(`$subExpression, [ref]`$subExpression) | Out-Null
-                                        }
+                        if ($valueType -eq "Instance" -and $subExpression -eq "`$null")
+                        {
+                            $subExpression = $null
+                        }
+                        else
+                        {
+                            # Try to parse the value based on the retrieved type.
+                            $scriptBlock = @"
+                                            `$typeStaticMethods = [$($valueType)] | gm -static
+                                            if (`$typeStaticMethods.Name.Contains('TryParse'))
+                                            {
+                                                [$($valueType)]::TryParse(`$subExpression, [ref]`$subExpression) | Out-Null
+                                            }
 "@
-                        Invoke-Expression -Command $scriptBlock | Out-Null
+                            Invoke-Expression -Command $scriptBlock | Out-Null
+                        }
                     }
                     $currentResult.Add($entry.Item1.ToString(), $subExpression)
                 }
