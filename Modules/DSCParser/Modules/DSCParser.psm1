@@ -802,7 +802,7 @@ function ConvertFrom-DSCObject
                         {
                             [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= `$$($entry.$property)")
                         }
-                        "Object\[\]|OrderedDictionary"
+                        "Object\[\]|OrderedDictionary|Hashtable"
                         {
                             if ($entry.$property.Length -gt 0)
                             {
@@ -811,7 +811,7 @@ function ConvertFrom-DSCObject
                                 {
                                     if ($objectToTest.'CIMInstance')
                                     {
-                                        if ($entry.$property.Length -gt 1)
+                                        if ($entry.$property -is [array])
                                         {
                                             $subResult = ConvertFrom-DSCObject -DSCResources $entry.$property -ChildLevel ($ChildLevel + 2)
                                             # Remove carriage return from last line
@@ -857,7 +857,7 @@ function ConvertFrom-DSCObject
                                         }
                                     }
                                 }
-                             }
+                            }
                         }
                     }
                 }
