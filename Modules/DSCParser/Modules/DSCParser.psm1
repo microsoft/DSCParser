@@ -190,6 +190,11 @@ function ConvertFrom-CIMInstanceToHashtable
                             {
                                 throw $_
                             }
+                            # If the connection to the WinRM service fails, inform the user to configure and enable it
+                            elseif ($_.Exception.Message -match 'The client cannot connect to the destination.*')
+                            {
+                                throw "Connection to the Windows Remote Management (WinRM) service failed. Please run ""winrm quickconfig"" or ""Enable-PSRemoting -Force -SkipNetworkProfileCheck"" to configure and enable it."
+                            }
                         }
                     } while ($firstTry)
                 }
