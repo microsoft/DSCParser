@@ -130,14 +130,14 @@ function ConvertFrom-CIMInstanceToHashtable
                                             -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
                                             -ErrorAction SilentlyContinue
 
-                $dscResourceInfo = $Script:DSCResources | Where-Object -FilterScript {$_.Name -eq $ResourceName}
+                $dscResourceInfo = $Script:DSCResources.Where({ $_.Name -eq $ResourceName })
 
                 if (-not $Script:MofSchemas.ContainsKey($ResourceName))
                 {
                     $directoryName = Split-Path -Path $dscResourceInfo.ParentPath -Leaf
                     $schemaPath = Join-Path -Path $dscResourceInfo.ParentPath -ChildPath "$directoryName.schema.mof"
                     $mofSchema = Get-Content -Path $schemaPath -Raw
-                    $Script:MofSchemas[$ResourceName] = $mofSchema
+                    $Script:MofSchemas.Add($ResourceName, $mofSchema)
                 }
                 else
                 {
@@ -520,8 +520,8 @@ function ConvertTo-DSCObject
             $ModulesToLoad += $currentModule
         }
     }
-    $Script:DSCResources = @()
-    $Script:MofSchemas = @{}
+    $Script:DSCResources = [System.Collections.Generic.List[System.Object]]::new(600)
+    $Script:MofSchemas = [System.Collections.Generic.Dictionary[System.String, System.String]]::new()
     foreach ($moduleToLoad in $ModulesToLoad)
     {
         $loadedModuleTest = Get-Module -Name $moduleToLoad.ModuleName -ListAvailable | Where-Object -FilterScript {$_.Version -eq $moduleToLoad.ModuleVersion}
@@ -545,7 +545,7 @@ function ConvertTo-DSCObject
             {
                 $currentResources = $currentResources | Where-Object -FilterScript {$_.Version -eq $moduleToLoad.ModuleVersion}
             }
-            $Script:DSCResources += $currentResources
+            $Script:DSCResources.AddRange($currentResources)
         }
     }
 
@@ -585,7 +585,7 @@ function ConvertTo-DSCObject
         $currentResourceInfo.Add("ResourceInstanceName", $resourceInstanceName)
 
         # Get a reference to the current resource.
-        $currentResource = $Script:DSCResources | Where-Object -FilterScript {$_.Name -eq $resourceType}
+        $currentResource = $Script:DSCResources.Where({ $_.Name -eq $resourceType })
 
         # Loop through all the key/pair value
         foreach ($keyValuePair in $resource.CommandElements[2].KeyValuePairs)
