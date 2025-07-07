@@ -130,16 +130,29 @@ function ConvertFrom-CIMInstanceToHashtable
                                             -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
                                             -ErrorAction SilentlyContinue
 
-                if ($null -eq $CIMClassObject)
+                $dscResourceInfo = $Script:DSCResources.Where({ $_.Name -eq $ResourceName })
+
+                if (-not $Script:MofSchemas.ContainsKey($ResourceName))
                 {
-                    if ($Script:IsPowerShellCore)
-                    {
-                        $dscResourceInfo = Get-PwshDscResource -Name $ResourceName
-                    }
-                    else
-                    {
-                        $dscResourceInfo = Get-DscResource -Name $ResourceName
-                    }
+                    $directoryName = Split-Path -Path $dscResourceInfo.ParentPath -Leaf
+                    $schemaPath = Join-Path -Path $dscResourceInfo.ParentPath -ChildPath "$directoryName.schema.mof"
+                    $mofSchema = Get-Content -Path $schemaPath -Raw
+                    $Script:MofSchemas.Add($ResourceName, $mofSchema)
+                }
+                else
+                {
+                    $mofSchema = $Script:MofSchemas[$ResourceName]
+                }
+
+                $pattern = "\[ClassVersion\(""([^""]+)""\)\]\s*class $CIMInstanceName\b"
+                if ($mofSchema -match $pattern) {
+                    $classVersion = [version]$matches[1]
+                } else {
+                    $classVersion = [version]"1.0.0.0"
+                }
+
+                if ($null -eq $CIMClassObject -or [Version]$CIMClassObject.CimClassQualifiers.Value -lt $classVersion)
+                {
                     $InvokeParams = @{
                         Name        = $ResourceName
                         Method      = 'Get'
@@ -507,7 +520,8 @@ function ConvertTo-DSCObject
             $ModulesToLoad += $currentModule
         }
     }
-    $DSCResources = @()
+    $Script:DSCResources = [System.Collections.Generic.List[System.Object]]::new(600)
+    $Script:MofSchemas = [System.Collections.Generic.Dictionary[System.String, System.String]]::new()
     foreach ($moduleToLoad in $ModulesToLoad)
     {
         $loadedModuleTest = Get-Module -Name $moduleToLoad.ModuleName -ListAvailable | Where-Object -FilterScript {$_.Version -eq $moduleToLoad.ModuleVersion}
@@ -531,7 +545,7 @@ function ConvertTo-DSCObject
             {
                 $currentResources = $currentResources | Where-Object -FilterScript {$_.Version -eq $moduleToLoad.ModuleVersion}
             }
-            $DSCResources += $currentResources
+            $Script:DSCResources.AddRange($currentResources)
         }
     }
 
@@ -571,7 +585,7 @@ function ConvertTo-DSCObject
         $currentResourceInfo.Add("ResourceInstanceName", $resourceInstanceName)
 
         # Get a reference to the current resource.
-        $currentResource = $DSCResources | Where-Object -FilterScript {$_.Name -eq $resourceType}
+        $currentResource = $Script:DSCResources.Where({ $_.Name -eq $resourceType })
 
         # Loop through all the key/pair value
         foreach ($keyValuePair in $resource.CommandElements[2].KeyValuePairs)
