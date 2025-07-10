@@ -152,7 +152,7 @@ function ConvertFrom-CIMInstanceToHashtable
                     $classVersion = [version]"1.0.0.0"
                 }
 
-                if ($null -eq $CIMClassObject -or [Version]$CIMClassObject.CimClassQualifiers.Value -lt $classVersion)
+                if ($null -eq $CIMClassObject -or [version]$CIMClassObject.CimClassQualifiers["ClassVersion"].Value -lt $classVersion)
                 {
                     $InvokeParams = @{
                         Name        = $ResourceName
@@ -235,6 +235,11 @@ function ConvertFrom-CIMInstanceToHashtable
                 $associatedCIMProperty = $CIMClassProperties.Where({ $_.Name -eq $entry.Item1.ToString() })
                 if ($null -ne $entry.Item2.PipelineElements)
                 {
+                    if ($null -eq $entry.Item2.PipelineElements.Expression -and $null -ne $entry.Item2.PipelineElements.CommandElements)
+                    {
+                        $currentResult.Add($entry.Item1.ToString(), $entry.Item2.PipelineElements[0].Extent.Text)
+                        continue
+                    }
                     $staticType = $entry.Item2.PipelineElements.Expression.StaticType.ToString()
                     $subExpression = $entry.Item2.PipelineElements.Expression.SubExpression
 
