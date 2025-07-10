@@ -152,7 +152,7 @@ function ConvertFrom-CIMInstanceToHashtable
                     $classVersion = [version]"1.0.0.0"
                 }
 
-                if ($null -eq $CIMClassObject -or [Version]$CIMClassObject.CimClassQualifiers.Value -lt $classVersion)
+                if ($null -eq $CIMClassObject -or [version]$CIMClassObject.CimClassQualifiers["ClassVersion"].Value -lt $classVersion)
                 {
                     $InvokeParams = @{
                         Name        = $ResourceName
