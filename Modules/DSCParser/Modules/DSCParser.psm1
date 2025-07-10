@@ -2,6 +2,10 @@
 
 if ($Script:IsPowerShellCore)
 {
+    if ($IsWindows)
+    {
+        Import-Module -Name 'PSDesiredStateConfiguration' -RequiredVersion 1.1 -UseWindowsPowerShell -WarningAction SilentlyContinue
+    }
     Import-Module -Name 'PSDesiredStateConfiguration' -MinimumVersion 2.0.7 -Prefix 'Pwsh'
 }
 
