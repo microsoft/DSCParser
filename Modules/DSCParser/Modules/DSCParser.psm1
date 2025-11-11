@@ -2,6 +2,10 @@
 
 if ($Script:IsPowerShellCore)
 {
+    if ($IsWindows)
+    {
+        Import-Module -Name 'PSDesiredStateConfiguration' -RequiredVersion 1.1 -UseWindowsPowerShell -WarningAction SilentlyContinue
+    }
     Import-Module -Name 'PSDesiredStateConfiguration' -MinimumVersion 2.0.7 -Prefix 'Pwsh'
 }
 
@@ -126,20 +130,30 @@ function ConvertFrom-CIMInstanceToHashtable
             if ([System.String]::IsNullOrEmpty($Schema))
             {
                 # Get the CimClass associated with the current CIMInstanceName
-                $CIMClassObject = Get-CimClass -ClassName $CIMInstanceName `
-                                            -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
-                                            -ErrorAction SilentlyContinue
+                $CIMClassObject = $Script:CimClasses[$CIMInstanceName]
+                $dscResourceInfo = $Script:DSCResources[$ResourceName]
 
-                if ($null -eq $CIMClassObject)
+                if (-not $Script:MofSchemas.ContainsKey($ResourceName))
                 {
-                    if ($Script:IsPowerShellCore)
-                    {
-                        $dscResourceInfo = Get-PwshDscResource -Name $ResourceName
-                    }
-                    else
-                    {
-                        $dscResourceInfo = Get-DscResource -Name $ResourceName
-                    }
+                    $directoryName = Split-Path -Path $dscResourceInfo.ParentPath -Leaf
+                    $schemaPath = Join-Path -Path $dscResourceInfo.ParentPath -ChildPath "$directoryName.schema.mof"
+                    $mofSchema = [System.IO.File]::ReadAllText($schemaPath)
+                    $Script:MofSchemas.Add($ResourceName, $mofSchema)
+                }
+                else
+                {
+                    $mofSchema = $Script:MofSchemas[$ResourceName]
+                }
+
+                $pattern = "\[ClassVersion\(""([^""]+)""\)\]\s*class $CIMInstanceName\b"
+                if ($mofSchema -match $pattern) {
+                    $classVersion = [version]$matches[1]
+                } else {
+                    $classVersion = [version]"1.0.0.0"
+                }
+
+                if ($null -eq $CIMClassObject -or [version]$CIMClassObject.CimClassQualifiers["ClassVersion"].Value -lt $classVersion)
+                {
                     $InvokeParams = @{
                         Name        = $ResourceName
                         Method      = 'Get'
@@ -174,6 +188,7 @@ function ConvertFrom-CIMInstanceToHashtable
                                                             -ErrorAction SilentlyContinue
                                 $breaker--
                             }
+                            $Script:CimClasses.Add($CIMClassObject.CimClassName, $CIMClassObject)
                         }
                         catch
                         {
@@ -190,6 +205,11 @@ function ConvertFrom-CIMInstanceToHashtable
                             {
                                 throw $_
                             }
+                            # If the connection to the WinRM service fails, inform the user to configure and enable it
+                            elseif ($_.Exception.Message -match 'The client cannot connect to the destination.*')
+                            {
+                                throw "Connection to the Windows Remote Management (WinRM) service failed. Please run ""winrm quickconfig"" or ""Enable-PSRemoting -Force -SkipNetworkProfileCheck"" to configure and enable it."
+                            }
                         }
                     } while ($firstTry)
                 }
@@ -202,7 +222,7 @@ function ConvertFrom-CIMInstanceToHashtable
                 {
                     $SchemaJSONObject = ConvertFrom-Json $Schema
                 }
-                $CIMClassObject = $SchemaJSONObject | Where-Object -FilterScript {$_.ClassName -eq $CIMInstanceName}
+                $CIMClassObject = $SchemaJSONObject.Where({ $_.ClassName -eq $CIMInstanceName })
                 $CIMClassProperties = $CIMClassObject.Parameters
             }
 
@@ -212,9 +232,14 @@ function ConvertFrom-CIMInstanceToHashtable
             }
             foreach ($entry in $keyPairs)
             {
-                $associatedCIMProperty = $CIMClassProperties | Where-Object -FilterScript {$_.Name -eq $entry.Item1.ToString()}
+                $associatedCIMProperty = $CIMClassProperties.Where({ $_.Name -eq $entry.Item1.ToString() })
                 if ($null -ne $entry.Item2.PipelineElements)
                 {
+                    if ($null -eq $entry.Item2.PipelineElements.Expression -and $null -ne $entry.Item2.PipelineElements.CommandElements)
+                    {
+                        $currentResult.Add($entry.Item1.ToString(), $entry.Item2.PipelineElements[0].Extent.Text)
+                        continue
+                    }
                     $staticType = $entry.Item2.PipelineElements.Expression.StaticType.ToString()
                     $subExpression = $entry.Item2.PipelineElements.Expression.SubExpression
 
@@ -365,15 +390,22 @@ function ConvertFrom-CIMInstanceToHashtable
                             $valueType = "Int32"
                         }
 
-                        # Try to parse the value based on the retrieved type.
-                        $scriptBlock = @"
-                                        `$typeStaticMethods = [$($valueType)] | gm -static
-                                        if (`$typeStaticMethods.Name.Contains('TryParse'))
-                                        {
-                                            [$($valueType)]::TryParse(`$subExpression, [ref]`$subExpression) | Out-Null
-                                        }
+                        if ($valueType -eq "Instance" -and $subExpression -eq "`$null")
+                        {
+                            $subExpression = $null
+                        }
+                        else
+                        {
+                            # Try to parse the value based on the retrieved type.
+                            $scriptBlock = @"
+                                            `$typeStaticMethods = [$($valueType)] | gm -static
+                                            if (`$typeStaticMethods.Name.Contains('TryParse'))
+                                            {
+                                                [$($valueType)]::TryParse(`$subExpression, [ref]`$subExpression) | Out-Null
+                                            }
 "@
-                        Invoke-Expression -Command $scriptBlock | Out-Null
+                            Invoke-Expression -Command $scriptBlock | Out-Null
+                        }
                     }
                     $currentResult.Add($entry.Item1.ToString(), $subExpression)
                 }
@@ -431,8 +463,10 @@ function ConvertTo-DSCObject
     $ParseErrors = $null
 
     # Use the AST to parse the DSC configuration
+    $errorPrefix = ""
     if (-not [System.String]::IsNullOrEmpty($Path) -and [System.String]::IsNullOrEmpty($Content))
     {
+        $errorPrefix = "$Path - "
         $Content = Get-Content $Path -Raw
     }
 
@@ -451,7 +485,26 @@ function ConvertTo-DSCObject
         }
     }
 
+    $Script:CimClasses = [System.Collections.Generic.Dictionary[System.String, System.Object]]::new([System.StringComparer]::InvariantCultureIgnoreCase)
+    $classes = Get-CimClass -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+        -ErrorAction SilentlyContinue
+
+    foreach ($class in $classes)
+    {
+        $Script:CimClasses.Add($class.CimClassName, $class)
+    }
+
     $AST = [System.Management.Automation.Language.Parser]::ParseInput($Content, [ref]$Tokens, [ref]$ParseErrors)
+
+    foreach ($parseError in $ParseErrors)
+    {
+        if ($parseError -like "Could not find the module*" -or $parseError -like "Undefined DSC resource*")
+        {
+            Write-Warning -Message "$($errorPrefix)Failed to find module or DSC resource: $parseError"
+        }
+
+        throw "$($errorPrefix)Error parsing configuration: $parseError"
+    }
 
     # Look up the Configuration definition ("")
     $Config = $AST.Find({$Args[0].GetType().Name -eq 'ConfigurationDefinitionAst'}, $False)
@@ -483,7 +536,9 @@ function ConvertTo-DSCObject
             $ModulesToLoad += $currentModule
         }
     }
-    $DSCResources = @()
+
+    $Script:DSCResources = [System.Collections.Generic.Dictionary[System.String, System.Object]]::new([System.StringComparer]::InvariantCultureIgnoreCase)
+    $Script:MofSchemas = [System.Collections.Generic.Dictionary[System.String, System.String]]::new([System.StringComparer]::InvariantCultureIgnoreCase)
     foreach ($moduleToLoad in $ModulesToLoad)
     {
         $loadedModuleTest = Get-Module -Name $moduleToLoad.ModuleName -ListAvailable | Where-Object -FilterScript {$_.Version -eq $moduleToLoad.ModuleVersion}
@@ -507,7 +562,10 @@ function ConvertTo-DSCObject
             {
                 $currentResources = $currentResources | Where-Object -FilterScript {$_.Version -eq $moduleToLoad.ModuleVersion}
             }
-            $DSCResources += $currentResources
+            foreach ($currentResource in $currentResources)
+            {
+                $Script:DSCResources.Add($currentResource.Name, $currentResource)
+            }
         }
     }
 
@@ -547,7 +605,7 @@ function ConvertTo-DSCObject
         $currentResourceInfo.Add("ResourceInstanceName", $resourceInstanceName)
 
         # Get a reference to the current resource.
-        $currentResource = $DSCResources | Where-Object -FilterScript {$_.Name -eq $resourceType}
+        $currentResource = $Script:DSCResources[$resourceType]
 
         # Loop through all the key/pair value
         foreach ($keyValuePair in $resource.CommandElements[2].KeyValuePairs)
@@ -610,7 +668,7 @@ function ConvertTo-DSCObject
             }
 
             # Retrieve the current property's type based on the resource's schema.
-            $currentPropertyInResourceSchema = $currentResource.Properties | Where-Object -FilterScript { $_.Name -eq $key }
+            $currentPropertyInResourceSchema = $currentResource.Properties.Where({ $_.Name -eq $key })
             $valueType = $currentPropertyInResourceSchema.PropertyType
 
             # If the value type is null, then the parameter doesn't exist
@@ -783,7 +841,7 @@ function ConvertFrom-DSCObject
                         {
                             [void]$results.AppendLine("$childSpacer    $property$additionalSpaces= `$$($entry.$property)")
                         }
-                        "Object\[\]|OrderedDictionary"
+                        "Object\[\]|OrderedDictionary|Hashtable"
                         {
                             if ($entry.$property.Length -gt 0)
                             {
@@ -792,7 +850,7 @@ function ConvertFrom-DSCObject
                                 {
                                     if ($objectToTest.'CIMInstance')
                                     {
-                                        if ($entry.$property.Length -gt 1)
+                                        if ($entry.$property -is [array])
                                         {
                                             $subResult = ConvertFrom-DSCObject -DSCResources $entry.$property -ChildLevel ($ChildLevel + 2)
                                             # Remove carriage return from last line
@@ -838,7 +896,7 @@ function ConvertFrom-DSCObject
                                         }
                                     }
                                 }
-                             }
+                            }
                         }
                     }
                 }
