@@ -172,15 +172,35 @@ function ConvertFrom-CIMInstanceToHashtable
                         $firstTry = $true
                         try
                         {
-                            Invoke-DscResource @InvokeParams | Out-Null
+                            try
+                            {
+                                Invoke-DscResource @InvokeParams | Out-Null
+                            }
+                            catch
+                            {
+                                if ($_.Exception.Message -ne "A parameter cannot be found that matches parameter name 'dummyValue'.")
+                                {
+                                    throw
+                                }
+                            }
                             $firstTry = $false
 
-                            $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
-                                                -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
-                                                -ErrorAction SilentlyContinue
+                            try
+                            {
+                                $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
+                                                    -Namespace 'ROOT/Microsoft/Windows/DesiredStateConfiguration' `
+                                                    -ErrorAction Stop
+                            }
+                            catch
+                            {
+                                if ($_.CategoryInfo.Category -eq 'PermissionDenied')
+                                {
+                                    throw
+                                }
+                            }
 
                             $breaker = 5
-                            while ($null -eq $CIMCLassObject -and $breaker -gt 0)
+                            while ($null -eq $CIMClassObject -and $breaker -gt 0)
                             {
                                 Start-Sleep -Seconds 1
                                 $CIMClassObject = Get-CimClass -ClassName $CimInstanceName `
