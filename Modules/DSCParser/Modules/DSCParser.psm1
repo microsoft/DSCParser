@@ -165,14 +165,13 @@ function ConvertTo-DSCObject
         }
 
         # Convert result to array of hashtables
-        $output = @()
+        $output = [System.Collections.Generic.List[System.Collections.Hashtable]]::new($result.Count)
         foreach ($item in $result)
         {
-            $hashtable = $item.ToHashtable()
-            $output += $hashtable
+            $output.Add($item.ToHashtable())
         }
 
-        return $output
+        return $output.ToArray()
     }
     catch
     {

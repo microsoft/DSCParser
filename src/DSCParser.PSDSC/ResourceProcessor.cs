@@ -24,14 +24,16 @@ namespace DSCParser.PSDSC
             "ConfigurationName"
         };
 
+        private static readonly string SystemConfigurationPath =
+            Path.Combine(Environment.SystemDirectory ?? string.Empty, "configuration");
+
         /// <summary>
         /// Gets resource from a dynamic keyword (CIM-based resource)
         /// </summary>
         public static DscResourceInfo? GetResourceFromKeyword(
             DynamicKeyword keyword,
             string[] patterns,
-            PSModuleInfo[] modules,
-            string[] dscResourceNames)
+            PSModuleInfo[] modules)
         {
             var implementationDetail = "ScriptBased";
 
@@ -51,8 +53,7 @@ namespace DSCParser.PSDSC
                 FriendlyName = keyword.ResourceName != keyword.Keyword ? keyword.Keyword : null
             };
 
-            // Get schema files
-            var schemaFiles = GetFileDefiningClass(keyword.ResourceName);
+            var schemaFiles = DscClassCacheReflection.GetFileDefiningClass(keyword.ResourceName);
 
             if (schemaFiles is not null && schemaFiles.Count > 0)
             {
@@ -71,12 +72,17 @@ namespace DSCParser.PSDSC
                     }
                 }
 
-                // If not found, use first schema file
-                schemaFileName ??= schemaFiles[0];
-
-                if (!schemaFileName.StartsWith($"{Environment.SystemDirectory}\\configuration", StringComparison.OrdinalIgnoreCase))
+                // If not found, fall back to the first schema file and re-resolve its module so that
+                // Module, Path and ParentPath all describe the same file.
+                if (schemaFileName is null)
                 {
-                    var classesFromSchema = DscResourceService.GetCachedClassByFileName(schemaFileName);
+                    schemaFileName = schemaFiles[0];
+                    moduleInfo = DscResourceHelpers.GetModule(modules, schemaFileName);
+                }
+
+                if (!schemaFileName.StartsWith(SystemConfigurationPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    var classesFromSchema = DscClassCacheReflection.GetCachedClassByFileName(schemaFileName);
                     bool found = classesFromSchema.Any(cimClass => cimClass.CimSystemProperties.ClassName.Equals(keyword.ResourceName, StringComparison.OrdinalIgnoreCase)
                         && (cimClass.CimSuperClassName?.Equals("OMI_BaseResource", StringComparison.OrdinalIgnoreCase) ?? false));
 
@@ -122,8 +128,7 @@ namespace DSCParser.PSDSC
                 resource.CompanyName = resource.Module.CompanyName;
             }
 
-            // Add properties from keyword
-            AddPropertiesFromKeyword(resource, keyword, dscResourceNames);
+            AddPropertiesFromKeyword(resource, keyword);
 
             // Sort properties: mandatory first, then by name
             var sortedProperties = resource.PropertiesAsResourceInfo
@@ -143,7 +148,7 @@ namespace DSCParser.PSDSC
         public static DscResourceInfo? GetCompositeResource(
             string[] patterns,
             ConfigurationInfo configInfo,
-            string[] ignoreParameters,
+            HashSet<string> ignoreParameters,
             PSModuleInfo[] modules)
         {
             // Check if resource matches patterns
@@ -170,8 +175,7 @@ namespace DSCParser.PSDSC
                 resource.ParentPath = string.IsNullOrEmpty(resource.Path) ? null : Path.GetDirectoryName(resource.Path);
             }
 
-            // Add properties from configuration parameters
-            AddPropertiesFromMetadata(resource, configInfo.Parameters.Values.ToArray(), ignoreParameters);
+            AddPropertiesFromMetadata(resource, configInfo.Parameters.Values, ignoreParameters);
 
             resource.ImplementationDetail = null;
 
@@ -183,8 +187,7 @@ namespace DSCParser.PSDSC
         /// </summary>
         private static void AddPropertiesFromKeyword(
             DscResourceInfo resource,
-            DynamicKeyword keyword,
-            string[] dscResourceNames)
+            DynamicKeyword keyword)
         {
             foreach (var property in keyword.Properties.Values)
             {
@@ -196,7 +199,7 @@ namespace DSCParser.PSDSC
                 var dscProperty = new DscResourcePropertyInfo
                 {
                     Name = property.Name,
-                    PropertyType = DscResourceHelpers.ConvertTypeConstraintToTypeName(property.TypeConstraint, dscResourceNames),
+                    PropertyType = DscResourceHelpers.ConvertTypeConstraintToTypeName(property.TypeConstraint),
                     IsMandatory = property.Mandatory
                 };
 
@@ -209,7 +212,7 @@ namespace DSCParser.PSDSC
                     }
                 }
 
-                resource.Properties.Add(dscProperty);
+                resource.AddProperty(dscProperty);
             }
         }
 
@@ -218,8 +221,8 @@ namespace DSCParser.PSDSC
         /// </summary>
         private static void AddPropertiesFromMetadata(
             DscResourceInfo resource,
-            ParameterMetadata[] parameters,
-            string[] ignoreParameters)
+            IEnumerable<ParameterMetadata> parameters,
+            HashSet<string> ignoreParameters)
         {
             foreach (var parameter in parameters)
             {
@@ -236,40 +239,9 @@ namespace DSCParser.PSDSC
                         a is ParameterAttribute pa && pa.Mandatory)
                 };
 
-                resource.Properties.Add(dscProperty);
+                resource.AddProperty(dscProperty);
             }
         }
 
-        /// <summary>
-        /// Gets file defining a CIM class (wrapper for DscClassCache)
-        /// This uses reflection to call the internal DscClassCache
-        /// </summary>
-        private static List<string>? GetFileDefiningClass(string className)
-        {
-            var dscClassCacheType = Type.GetType(
-                "Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache, " +
-                "System.Management.Automation",
-                throwOnError: false);
-
-            if (dscClassCacheType is null)
-            {
-                return null;
-            }
-
-            var method = dscClassCacheType.GetMethod(
-                "GetFileDefiningClass",
-                BindingFlags.Public | BindingFlags.Static,
-                null,
-                [typeof(string)],
-                null);
-
-            if (method is null)
-            {
-                return null;
-            }
-
-            var result = method.Invoke(null, [className]);
-            return result as List<string>;
-        }
     }
 }

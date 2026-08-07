@@ -59,3 +59,53 @@ jobs:
               throw "No functions exported from the DSCParser module."
           }
           Write-Host "Exported functions: $($exportedFunctions -join ', ')"
+
+      - name: Validate Class-Based Resource Discovery And Parsing
+        shell: pwsh
+        run: |
+          Import-Module ./DSCParser/DSCParser.psd1 -Force -ErrorAction Stop
+
+          $classBasedModule = Get-Module -ListAvailable |
+              Where-Object { $_.ExportedDscResources.Count -gt 0 } |
+              Select-Object -First 1
+
+          if ($null -eq $classBasedModule)
+          {
+              Write-Host "::warning::No class-based DSC resource module installed; skipping class-based validation."
+              exit 0
+          }
+
+          $resources = @(Get-DscResourceV2 -Module $classBasedModule.Name -ErrorAction Stop)
+          if ($resources.Count -eq 0)
+          {
+              throw "No class-based resources discovered for module '$($classBasedModule.Name)'."
+          }
+
+          $notClassBased = $resources | Where-Object { $_.ImplementationDetail -ne 'ClassBased' }
+          if ($notClassBased)
+          {
+              throw "Expected all resources to be ClassBased, got: $($notClassBased.Name -join ', ')"
+          }
+
+          $resource = $resources[0]
+          $config = @"
+          Configuration Test
+          {
+              Import-DscResource -ModuleName $($classBasedModule.Name) -ModuleVersion $($classBasedModule.Version)
+              Node localhost
+              {
+                  $($resource.Name) TestInstance
+                  {
+                      $($resource.Properties[0].Name) = "TestValue"
+                  }
+              }
+          }
+          "@
+
+          $parsed = @(ConvertTo-DSCObject -Content $config -ErrorAction Stop)
+          if ($parsed.Count -ne 1 -or $parsed[0].ResourceName -ne $resource.Name)
+          {
+              throw "Failed to parse a class-based configuration for '$($resource.Name)'."
+          }
+
+          Write-Host "Class-based discovery and parsing validated against $($classBasedModule.Name) ($($resources.Count) resources)."

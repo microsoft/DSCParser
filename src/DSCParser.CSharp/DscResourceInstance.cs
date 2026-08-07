@@ -10,8 +10,19 @@ namespace DSCParser.CSharp
     /// </summary>
     public class DscResourceInstance
     {
+        /// <summary>
+        /// Gets or sets the DSC resource type name
+        /// </summary>
         public string ResourceName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Gets or sets the name given to this instance in the configuration
+        /// </summary>
         public string ResourceInstanceName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Gets or sets the parsed properties of this instance
+        /// </summary>
         public Dictionary<string, object?> Properties { get; set; } = [];
 
         /// <summary>
@@ -22,7 +33,7 @@ namespace DSCParser.CSharp
         /// <summary>
         /// Gets a property value
         /// </summary>
-        public object? GetProperty(string key) => Properties.ContainsKey(key) ? Properties[key] : null;
+        public object? GetProperty(string key) => Properties.TryGetValue(key, out object? value) ? value : null;
 
         /// <summary>
         /// Converts to Hashtable for PowerShell compatibility
@@ -73,8 +84,19 @@ namespace DSCParser.CSharp
     /// </summary>
     public class DscParseOptions
     {
+        /// <summary>
+        /// Gets or sets whether comments are captured as _metadata_ properties
+        /// </summary>
         public bool IncludeComments { get; set; } = false;
+
+        /// <summary>
+        /// Gets or sets whether CIM instance type names are emitted as CIMInstance keys
+        /// </summary>
         public bool IncludeCIMInstanceInfo { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets an optional schema definition
+        /// </summary>
         public string? Schema { get; set; }
     }
 }
