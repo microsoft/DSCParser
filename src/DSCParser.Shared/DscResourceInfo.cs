@@ -35,17 +35,17 @@ namespace Microsoft.PowerShell.DesiredStateConfiguration
     /// </summary>
     public sealed class DscResourceInfo
     {
-        /// <summary>
-        /// Initializes a new instance of the DscResourceInfo class
-        /// </summary>
-        private List<DscResourcePropertyInfo> _properties = [];
-        private List<object>? _propertiesAsObjects;
+        // Single source of truth for the properties. Both public shapes below read and write this
+        // same list, so an append through either one is observable from the other.
+        private readonly List<object> _properties = [];
+        private readonly DscResourcePropertyInfoView _propertiesAsResourceInfo;
 
         /// <summary>
         /// Initializes a new instance of the DscResourceInfo class
         /// </summary>
         public DscResourceInfo()
         {
+            _propertiesAsResourceInfo = new DscResourcePropertyInfoView(_properties);
         }
 
         /// <summary>
@@ -116,26 +116,23 @@ namespace Microsoft.PowerShell.DesiredStateConfiguration
         public string? CompanyName { get; set; }
 
         /// <summary>
-        /// Gets the properties of the resource. Backing storage, so reading it does not allocate.
+        /// Gets the properties of the resource as a typed list. This is a live view over the same
+        /// storage as <see cref="Properties"/>, not a copy, so mutating either is visible from both.
         /// </summary>
-        public List<DscResourcePropertyInfo> PropertiesAsResourceInfo => _properties;
+        public IList<DscResourcePropertyInfo> PropertiesAsResourceInfo => _propertiesAsResourceInfo;
 
         /// <summary>
         /// Gets the properties of the resource as a loosely typed list. This shape exists for
         /// Windows PowerShell interop, where the DSCResourcePropertyInfo type from
         /// Microsoft.Windows.DSC.CoreConfProviders.dll is incompatible with our own.
         /// </summary>
-        public List<object> Properties => _propertiesAsObjects ??= _properties.ConvertAll(prop => (object)prop);
+        public List<object> Properties => _properties;
 
         /// <summary>
         /// Adds a property to the resource.
         /// </summary>
         /// <param name="property">Property to add</param>
-        public void AddProperty(DscResourcePropertyInfo property)
-        {
-            _properties.Add(property);
-            _propertiesAsObjects = null;
-        }
+        public void AddProperty(DscResourcePropertyInfo property) => _properties.Add(property);
 
         /// <summary>
         /// Gets or sets implementation detail (e.g., "ScriptBased", "ClassBased")
@@ -150,18 +147,38 @@ namespace Microsoft.PowerShell.DesiredStateConfiguration
         /// <param name="properties">Updated properties</param>
         public void UpdateProperties(List<DscResourcePropertyInfo> properties)
         {
-            _properties = properties;
-            _propertiesAsObjects = null;
+            // Refill rather than reassign, so anything already holding Properties or
+            // PropertiesAsResourceInfo keeps observing this resource.
+            _properties.Clear();
+            _properties.AddRange(properties);
         }
 
         /// <summary>
         /// Updates properties of the resource.
         /// </summary>
         /// <param name="properties">Updated properties</param>
+        /// <exception cref="InvalidCastException">
+        /// An element is not a <see cref="DscResourcePropertyInfo"/>.
+        /// </exception>
         public void UpdateProperties(List<object> properties)
         {
-            _properties = properties.ConvertAll(prop => (DscResourcePropertyInfo)prop);
-            _propertiesAsObjects = null;
+            if (ReferenceEquals(properties, _properties))
+            {
+                return;
+            }
+
+            // Validate up front so a bad element leaves the existing properties untouched.
+            foreach (object property in properties)
+            {
+                if (property is not null and not DscResourcePropertyInfo)
+                {
+                    throw new InvalidCastException(
+                        $"Cannot store an object of type '{property.GetType().FullName}' as a DSC resource property.");
+                }
+            }
+
+            _properties.Clear();
+            _properties.AddRange(properties);
         }
     }
 

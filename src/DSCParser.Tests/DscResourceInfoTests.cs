@@ -182,4 +182,91 @@ public class DscResourceInfoTests
     }
 
     #endregion
+
+    #region Properties / PropertiesAsResourceInfo share one backing store
+
+    [Fact]
+    public void Properties_Add_ShouldBeVisibleFromPropertiesAsResourceInfo()
+    {
+        var info = new DscResourceInfo();
+        var prop = new DscResourcePropertyInfo { Name = "Ensure", PropertyType = "[String]" };
+
+        info.Properties.Add(prop);
+
+        Assert.Single(info.PropertiesAsResourceInfo);
+        Assert.Same(prop, info.PropertiesAsResourceInfo[0]);
+    }
+
+    [Fact]
+    public void PropertiesAsResourceInfo_Add_ShouldBeVisibleFromProperties()
+    {
+        var info = new DscResourceInfo();
+        var prop = new DscResourcePropertyInfo { Name = "Path", PropertyType = "[String]" };
+
+        info.PropertiesAsResourceInfo.Add(prop);
+
+        Assert.Single(info.Properties);
+        Assert.Same(prop, info.Properties[0]);
+    }
+
+    [Fact]
+    public void Properties_Add_ShouldSurviveSubsequentAddProperty()
+    {
+        var info = new DscResourceInfo();
+        info.Properties.Add(new DscResourcePropertyInfo { Name = "First" });
+
+        info.AddProperty(new DscResourcePropertyInfo { Name = "Second" });
+
+        Assert.Equal(2, info.Properties.Count);
+        Assert.Equal(["First", "Second"], info.PropertiesAsResourceInfo.Select(p => p.Name));
+    }
+
+    [Fact]
+    public void UpdateProperties_ShouldBeVisibleThroughAPreviouslyReadPropertiesReference()
+    {
+        var info = new DscResourceInfo();
+        info.AddProperty(new DscResourcePropertyInfo { Name = "Stale" });
+
+        var captured = info.Properties;
+        var captiredAsResourceInfo = info.PropertiesAsResourceInfo;
+
+        info.UpdateProperties([new DscResourcePropertyInfo { Name = "Fresh" }]);
+
+        Assert.Single(captured);
+        Assert.Equal("Fresh", ((DscResourcePropertyInfo)captured[0]).Name);
+        Assert.Single(captiredAsResourceInfo);
+        Assert.Equal("Fresh", captiredAsResourceInfo[0].Name);
+    }
+
+    [Fact]
+    public void UpdateProperties_WithSelf_ShouldBeANoOp()
+    {
+        var info = new DscResourceInfo();
+        info.AddProperty(new DscResourcePropertyInfo { Name = "Keep" });
+
+        info.UpdateProperties(info.Properties);
+
+        Assert.Single(info.Properties);
+        Assert.Equal("Keep", info.PropertiesAsResourceInfo[0].Name);
+    }
+
+    [Fact]
+    public void UpdateProperties_WithNonPropertyObject_ShouldThrowAndLeaveExistingPropertiesIntact()
+    {
+        var info = new DscResourceInfo();
+        info.AddProperty(new DscResourcePropertyInfo { Name = "Existing" });
+
+        var bad = new List<object>
+        {
+            new DscResourcePropertyInfo { Name = "Good" },
+            "not a property"
+        };
+
+        Assert.Throws<InvalidCastException>(() => info.UpdateProperties(bad));
+
+        Assert.Single(info.Properties);
+        Assert.Equal("Existing", info.PropertiesAsResourceInfo[0].Name);
+    }
+
+    #endregion
 }
