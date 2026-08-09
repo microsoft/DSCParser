@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- BenchmarkDotNet requires an optimized build to produce meaningful numbers. -->
+    <Optimize Condition="'$(Configuration)' == 'Release'">true</Optimize>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="Microsoft.PowerShell.SDK" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DSCParser.CSharp\DSCParser.CSharp.csproj" />
+    <ProjectReference Include="..\DSCParser.PSDSC\DSCParser.PSDSC.csproj" />
+    <ProjectReference Include="..\DSCParser.Shared\DSCParser.Shared.csproj" />
+  </ItemGroup>
+
+</Project>

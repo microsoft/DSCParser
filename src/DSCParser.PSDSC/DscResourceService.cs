@@ -48,13 +48,13 @@ namespace DSCParser.PSDSC
 
             try
             {
-                DscClassCacheReflection.LoadDefaultCimKeywords();
+                DscKeywordRegistry.EnsureDefaultKeywordsLoaded();
 
                 var modules = GetModuleList(moduleName) ?? [];
 
                 if (modules.Length > 0)
                 {
-                    ImportResourcesFromModules(modules);
+                    DscKeywordRegistry.ImportModules(modules);
                 }
 
                 foreach (var keyword in GetCachedKeywords(moduleName))
@@ -106,8 +106,6 @@ namespace DSCParser.PSDSC
             }
             finally
             {
-                DscClassCacheReflection.ResetDynamicKeywords();
-                DscClassCacheReflection.ClearCache();
                 DscResourceHelpers.ClearModuleCache();
             }
         }
@@ -154,36 +152,6 @@ namespace DSCParser.PSDSC
             {
                 ReportWarning($"Failed to enumerate modules. Error message: {ex.Message}");
                 return null;
-            }
-        }
-
-        private static void ImportResourcesFromModules(PSModuleInfo[] modules)
-        {
-            foreach (var module in modules)
-            {
-                if (module.ExportedDscResources.Count > 0)
-                {
-                    DscClassCacheReflection.ImportClassResourcesFromModule(module, module.ExportedDscResources);
-                }
-
-                var dscResourcesPath = Path.Combine(module.ModuleBase, "DscResources");
-                if (Directory.Exists(dscResourcesPath))
-                {
-                    foreach (var resourceDir in Directory.GetDirectories(dscResourcesPath))
-                    {
-                        var resourceName = Path.GetFileName(resourceDir);
-
-                        // A MOF-based resource is defined by its schema file. If the schema file
-                        // does not exist (e.g. for class-based resources), skip importing keywords.
-                        if (!File.Exists(Path.Combine(resourceDir, $"{resourceName}.schema.mof")))
-                        {
-                            continue;
-                        }
-
-                        DscClassCacheReflection.ImportCimKeywordsFromModule(module, resourceName);
-                        DscClassCacheReflection.ImportScriptKeywordsFromModule(module, resourceName);
-                    }
-                }
             }
         }
 

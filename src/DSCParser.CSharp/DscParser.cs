@@ -8,6 +8,7 @@ using System.Management.Automation;
 using System.Management.Automation.Language;
 using System.Text;
 using System.Text.RegularExpressions;
+using DSCParser.PSDSC;
 using DscResourceInfo = Microsoft.PowerShell.DesiredStateConfiguration.DscResourceInfo;
 using DscResourcePropertyInfo = Microsoft.PowerShell.DesiredStateConfiguration.DscResourcePropertyInfo;
 
@@ -29,6 +30,12 @@ namespace DSCParser.CSharp
             @"(import-dscresource\b[^\n]*?)\s+-moduleversion\s+(?:""[^""]*""|'[^']*'|\S+)([^\n]*)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+        private static readonly Regex ImportDscResourceStatementRegex = new(
+            @"^[ \t]*import-dscresource\b([^\r\n]*)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Multiline | RegexOptions.Compiled);
+
+        private const string ImportDscResourcePlaceholder = "DscParserImportDscResource";
+
         /// <summary>
         /// Receives non-fatal diagnostics such as unresolvable modules. When unset, they are dropped
         /// rather than written to the console, which would corrupt a PowerShell host's output stream.
@@ -42,6 +49,7 @@ namespace DSCParser.CSharp
         {
             _dscResources.Clear();
             _moduleHasMultipleVersions.Clear();
+            DscKeywordRegistry.Reset();
         }
 
         private static void ReportWarning(string message) => WarningSink?.Invoke(message);
@@ -124,29 +132,23 @@ namespace DSCParser.CSharp
 
             dscContent = RemoveModuleVersionInfo(dscContent, modulesToRemoveVersionFrom);
 
-            // Parse the DSC configuration using PowerShell AST
-            ScriptBlockAst ast = Parser.ParseInput(dscContent, out Token[] tokens, out ParseError[] parseErrors);
+            List<ModuleReference> modulesToLoad = GetModulesToLoad(dscContent);
+            RegisterKeywords(modulesToLoad, errorPrefix);
 
-            // Check for parse errors
-            foreach (ParseError error in parseErrors)
-            {
-                if (IsRecoverableParseError(error))
-                {
-                    ReportWarning($"{errorPrefix}{DescribeParseError(error)}");
-                }
-                else
-                {
-                    throw new InvalidOperationException($"{errorPrefix}Error parsing configuration: {error.Message}");
-                }
-            }
+            // Parse the DSC configuration using PowerShell AST instead of with "Import-DscResource"
+            // to avoid loading modules from disk, which may be very slow with many class-based resources
+            ScriptBlockAst ast = Parser.ParseInput(
+                RemoveImportDscResourceStatements(dscContent), out Token[] tokens, out ParseError[] parseErrors);
 
             // Find the Configuration definition
-            if (ast.Find(a => a is ConfigurationDefinitionAst, false) is not ConfigurationDefinitionAst configAst)
+            ConfigurationDefinitionAst? configAst = ast.Find(a => a is ConfigurationDefinitionAst, false) as ConfigurationDefinitionAst;
+
+            ReportParseErrors(parseErrors, configAst, errorPrefix);
+
+            if (configAst is null)
             {
                 throw new InvalidOperationException("No Configuration definition found in the DSC content");
             }
-
-            List<ModuleReference> modulesToLoad = GetModulesToLoad(configAst);
 
             // Initialize DSC resources
             InitializeDscResources(modulesToLoad, dscResourcesConverted);
@@ -310,22 +312,26 @@ namespace DSCParser.CSharp
             return singleVersionModules;
         }
 
-        private static List<ModuleReference> GetModulesToLoad(ConfigurationDefinitionAst configAst)
+        /// <summary>
+        /// Reads the Import-DSCResource statements straight from the configuration text, so the
+        /// keywords can be registered before the configuration is parsed and the statements removed
+        /// from that parse.
+        /// </summary>
+        private static List<ModuleReference> GetModulesToLoad(string content)
         {
             List<ModuleReference> modulesToLoad = [];
-            IEnumerable<DynamicKeywordStatementAst> statements = configAst.Body.ScriptBlock.EndBlock.Statements
-                .OfType<DynamicKeywordStatementAst>();
 
-            foreach (DynamicKeywordStatementAst statement in statements)
+            foreach (Match statement in ImportDscResourceStatementRegex.Matches(content))
             {
-                ReadOnlyCollection<CommandElementAst> elements = statement.CommandElements;
+                ScriptBlockAst statementAst = Parser.ParseInput(
+                    ImportDscResourcePlaceholder + statement.Groups[1].Value, out Token[] _, out ParseError[] _);
 
-                if (elements.Count == 0 ||
-                    elements[0] is not StringConstantExpressionAst keyword ||
-                    !keyword.Value.Equals("Import-DSCResource", StringComparison.OrdinalIgnoreCase))
+                if (statementAst.Find(a => a is CommandAst, true) is not CommandAst command)
                 {
                     continue;
                 }
+
+                ReadOnlyCollection<CommandElementAst> elements = command.CommandElements;
 
                 string? moduleName = null;
                 Version? moduleVersion = null;
@@ -356,6 +362,50 @@ namespace DSCParser.CSharp
             }
 
             return modulesToLoad;
+        }
+
+        private static string RemoveImportDscResourceStatements(string content)
+        {
+            return ImportDscResourceStatementRegex.Replace(content, string.Empty);
+        }
+
+        private static void RegisterKeywords(List<ModuleReference> modulesToLoad, string errorPrefix)
+        {
+            foreach (ModuleReference reference in modulesToLoad)
+            {
+                if (!DscKeywordRegistry.EnsureRegistered(reference.Name, reference.Version))
+                {
+                    string version = reference.Version is null ? string.Empty : $", {reference.Version}";
+                    ReportWarning($"{errorPrefix}Could not find the module '<{reference.Name}{version}>'.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Errors outside the configuration block never affected the conversion, and registering the
+        /// keywords up front makes PowerShell report some constructs that follow the block, such as the
+        /// trailing invocation an export appends, as errors. Only errors inside the block are fatal.
+        /// </summary>
+        private static void ReportParseErrors(ParseError[] parseErrors, ConfigurationDefinitionAst? configAst, string errorPrefix)
+        {
+            foreach (ParseError error in parseErrors)
+            {
+                if (configAst is not null &&
+                    (error.Extent.StartOffset < configAst.Extent.StartOffset ||
+                     error.Extent.EndOffset > configAst.Extent.EndOffset))
+                {
+                    continue;
+                }
+
+                if (IsRecoverableParseError(error))
+                {
+                    ReportWarning($"{errorPrefix}{DescribeParseError(error)}");
+                }
+                else
+                {
+                    throw new InvalidOperationException($"{errorPrefix}Error parsing configuration: {error.Message}");
+                }
+            }
         }
 
         private static void InitializeDscResources(List<ModuleReference> modulesToLoad, List<DscResourceInfo> allDscResources)

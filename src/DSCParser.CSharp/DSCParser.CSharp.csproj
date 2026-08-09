@@ -12,6 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\DSCParser.PSDSC\DSCParser.PSDSC.csproj" />
     <ProjectReference Include="..\DSCParser.Shared\DSCParser.Shared.csproj" />
   </ItemGroup>
 

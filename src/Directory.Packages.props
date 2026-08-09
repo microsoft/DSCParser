@@ -11,6 +11,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+    <!-- The benchmarks need a hostable PowerShell with its command modules, not just the engine. -->
+    <PackageVersion Include="Microsoft.PowerShell.SDK" Version="7.6.4" />
     <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.9.0" />
     <PackageVersion Include="Microsoft.Testing.Extensions.TrxReport" Version="2.3.3" />
     <!-- Real PowerShell engine for tests. PowerShellStandard.Library is a reference-only facade whose types are not implemented. -->
