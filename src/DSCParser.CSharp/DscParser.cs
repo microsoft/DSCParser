@@ -46,6 +46,29 @@ namespace DSCParser.CSharp
 
         private static void ReportWarning(string message) => WarningSink?.Invoke(message);
 
+        // A configuration exported by an older module version references resources and properties the
+        // installed version no longer has. Warn and convert what is left instead of failing outright.
+        private static readonly HashSet<string> RecoverableParseErrorIds = new(StringComparer.Ordinal)
+        {
+            "ResourceNotDefined",
+            "InvalidInstanceProperty"
+        };
+
+        private static bool IsRecoverableParseError(ParseError error)
+        {
+            return RecoverableParseErrorIds.Contains(error.ErrorId) ||
+                   error.Message.Contains("Could not find the module") ||
+                   error.Message.Contains("Undefined DSC resource");
+        }
+
+        private static string DescribeParseError(ParseError error)
+        {
+            // The raw message lists every valid member, which is too noisy to surface.
+            return error.ErrorId.Equals("InvalidInstanceProperty", StringComparison.Ordinal)
+                ? $"Property '{error.Extent.Text}' (line {error.Extent.StartLineNumber}) does not exist on its resource in the installed module version."
+                : error.Message;
+        }
+
         /// <summary>
         /// Converts a DSC configuration file or content to DSC objects
         /// </summary>
@@ -107,10 +130,9 @@ namespace DSCParser.CSharp
             // Check for parse errors
             foreach (ParseError error in parseErrors)
             {
-                if (error.Message.Contains("Could not find the module") ||
-                    error.Message.Contains("Undefined DSC resource"))
+                if (IsRecoverableParseError(error))
                 {
-                    ReportWarning($"{errorPrefix}Failed to find module or DSC resource: {error.Message}");
+                    ReportWarning($"{errorPrefix}{DescribeParseError(error)}");
                 }
                 else
                 {
@@ -390,8 +412,14 @@ namespace DSCParser.CSharp
                 ?? throw new InvalidOperationException("Failed to parse Node body statements in DSC configuration.");
             ReadOnlyCollection<StatementAst> resourceInstancesInNode = scriptBlockBody.Statements;
 
-            foreach (DynamicKeywordStatementAst resource in resourceInstancesInNode.Cast<DynamicKeywordStatementAst>())
+            for (int index = 0; index < resourceInstancesInNode.Count; index++)
             {
+                if (resourceInstancesInNode[index] is not DynamicKeywordStatementAst resource)
+                {
+                    index += SkipUnresolvedResource(resourceInstancesInNode, index);
+                    continue;
+                }
+
                 DscResourceInstance currentResourceInfo = new();
                 Dictionary<string, object?> currentResourceProperties = [];
 
@@ -419,8 +447,9 @@ namespace DSCParser.CSharp
 
                 if (!_dscResources.ContainsKey(resourceType))
                 {
-                    throw new InvalidOperationException(
-                        $"Resource type '{resourceType}' (instance '{resourceInstanceName}') was not found among the loaded DSC resources.");
+                    ReportWarning(
+                        $"Resource '{resourceType}' (instance '{resourceInstanceName}') was not found among the loaded DSC resources and was omitted from the converted configuration.");
+                    continue;
                 }
 
                 foreach (Tuple<ExpressionAst, StatementAst> keyValuePair in ((HashtableAst)resource.CommandElements[2]).KeyValuePairs)
@@ -449,6 +478,42 @@ namespace DSCParser.CSharp
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Reports a resource the installed modules no longer define and returns how many additional
+        /// statements it spans. Such a resource is not a DSC keyword, so PowerShell parses it as a plain
+        /// command: "Name Instance" followed by a detached body, or "Name Instance { ... }" on one line.
+        /// </summary>
+        private static int SkipUnresolvedResource(ReadOnlyCollection<StatementAst> statements, int index)
+        {
+            if (statements[index] is not PipelineAst pipeline ||
+                pipeline.PipelineElements.Count == 0 ||
+                pipeline.PipelineElements[0] is not CommandAst command ||
+                command.CommandElements.Count is not (2 or 3) ||
+                command.CommandElements[0] is not StringConstantExpressionAst resourceName)
+            {
+                ReportWarning($"Skipped an unrecognized statement in the DSC configuration: {statements[index].Extent.Text}");
+                return 0;
+            }
+
+            string instanceName = command.CommandElements[1] is StringConstantExpressionAst instance
+                ? instance.Value
+                : command.CommandElements[1].Extent.Text;
+
+            ReportWarning(
+                $"Resource '{resourceName.Value}' (instance '{instanceName}') could not be resolved against the imported module(s) " +
+                "and was omitted from the converted configuration. It was likely removed in the installed module version.");
+
+            return command.CommandElements.Count == 2 && IsDetachedResourceBody(statements, index + 1) ? 1 : 0;
+        }
+
+        private static bool IsDetachedResourceBody(ReadOnlyCollection<StatementAst> statements, int index)
+        {
+            return index < statements.Count &&
+                   statements[index] is PipelineAst pipeline &&
+                   pipeline.PipelineElements.Count == 1 &&
+                   pipeline.PipelineElements[0] is CommandExpressionAst { Expression: ScriptBlockExpressionAst };
         }
 
         private static object? ProcessPipelineAst(PipelineAst pip, bool includeCimInstanceInfo)
@@ -620,9 +685,16 @@ namespace DSCParser.CSharp
 
             // Arrays containing CIM instances are represented as DynamicKeywordStatementAst
             List<object> arrayCimInstances = [];
-            foreach (DynamicKeywordStatementAst arrayCimInstance in arrayDefinition.Statements.Cast<DynamicKeywordStatementAst>())
+            foreach (StatementAst statement in arrayDefinition.Statements)
             {
-                arrayCimInstances.Add(ProcessDynamicKeywordStatementAst(arrayCimInstance, includeCimInstanceInfo));
+                if (statement is DynamicKeywordStatementAst arrayCimInstance)
+                {
+                    arrayCimInstances.Add(ProcessDynamicKeywordStatementAst(arrayCimInstance, includeCimInstanceInfo));
+                }
+                else
+                {
+                    ReportWarning($"Skipped an unrecognized array element in the DSC configuration: {statement.Extent.Text}");
+                }
             }
             return arrayCimInstances;
         }

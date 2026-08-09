@@ -154,14 +154,30 @@ function ConvertTo-DSCObject
             $options.Schema = $Schema
         }
 
-        # Call ConvertToDscObject
-        if ($PSCmdlet.ParameterSetName -eq 'Path')
+        # Buffer diagnostics and emit them after the call, so Write-Warning runs on the pipeline
+        # thread and honours the caller's $WarningPreference. The sink is a process-wide static.
+        $parserWarnings = [System.Collections.Generic.List[System.String]]::new()
+        [DSCParser.CSharp.DscParser]::WarningSink = [System.Action[System.String]] { param($Message) $parserWarnings.Add($Message) }
+
+        try
         {
-            $result = [DSCParser.CSharp.DscParser]::ConvertToDscObject($Path, $null, $options, $Script:DscResourceCache)
+            # Call ConvertToDscObject
+            if ($PSCmdlet.ParameterSetName -eq 'Path')
+            {
+                $result = [DSCParser.CSharp.DscParser]::ConvertToDscObject($Path, $null, $options, $Script:DscResourceCache)
+            }
+            else
+            {
+                $result = [DSCParser.CSharp.DscParser]::ConvertToDscObject($null, $Content, $options, $Script:DscResourceCache)
+            }
         }
-        else
+        finally
         {
-            $result = [DSCParser.CSharp.DscParser]::ConvertToDscObject($null, $Content, $options, $Script:DscResourceCache)
+            [DSCParser.CSharp.DscParser]::WarningSink = $null
+            foreach ($parserWarning in $parserWarnings)
+            {
+                Write-Warning -Message $parserWarning
+            }
         }
 
         # Convert result to array of hashtables
