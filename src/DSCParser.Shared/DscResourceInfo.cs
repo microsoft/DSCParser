@@ -35,34 +35,39 @@ namespace Microsoft.PowerShell.DesiredStateConfiguration
     /// </summary>
     public sealed class DscResourceInfo
     {
+        // Single source of truth for the properties. Both public shapes below read and write this
+        // same list, so an append through either one is observable from the other.
+        private readonly List<object> _properties = [];
+        private readonly DscResourcePropertyInfoView _propertiesAsResourceInfo;
+
         /// <summary>
         /// Initializes a new instance of the DscResourceInfo class
         /// </summary>
         public DscResourceInfo()
         {
-            Properties = [];
+            _propertiesAsResourceInfo = new DscResourcePropertyInfoView(_properties);
         }
 
         /// <summary>
         /// Gets or sets resource type name
         /// </summary>
-        public string ResourceType { get; set; }
+        public string? ResourceType { get; set; }
 
         /// <summary>
         /// Gets or sets Name of the resource. This name is used to access the resource
         /// </summary>
-        public string Name { get; set; }
+        public string? Name { get; set; }
 
         /// <summary>
         /// Gets or sets friendly name defined for the resource
         /// </summary>
-        public string FriendlyName { get; set; }
+        public string? FriendlyName { get; set; }
 
         /// <summary>
         /// Gets or sets module which implements the resource. This could point to parent module, if the DSC resource is implemented
         /// by one of nested modules.
         /// </summary>
-        public PSModuleInfo Module { get; set; }
+        public PSModuleInfo? Module { get; set; }
 
         /// <summary>
         /// Gets name of the module which implements the resource.
@@ -91,14 +96,14 @@ namespace Microsoft.PowerShell.DesiredStateConfiguration
         /// MOF file, this will be path to a module which resides in the same folder where schema.mof file is present.
         /// For composite resources, this will be the module which implements the resource
         /// </summary>
-        public string Path { get; set; }
+        public string? Path { get; set; }
 
         /// <summary>
         /// Gets or sets parent folder, where the resource is defined
         /// It is the folder containing either the implementing module(=Path) or folder containing ".schema.mof".
         /// For native providers, Path will be null and only ParentPath will be present.
         /// </summary>
-        public string ParentPath { get; set; }
+        public string? ParentPath { get; set; }
 
         /// <summary>
         /// Gets or sets a value which indicate how DSC resource is implemented
@@ -108,17 +113,26 @@ namespace Microsoft.PowerShell.DesiredStateConfiguration
         /// <summary>
         /// Gets or sets company which owns this resource
         /// </summary>
-        public string CompanyName { get; set; }
+        public string? CompanyName { get; set; }
 
         /// <summary>
-        /// Gets or sets properties of the resource
+        /// Gets the properties of the resource as a typed list. This is a live view over the same
+        /// storage as <see cref="Properties"/>, not a copy, so mutating either is visible from both.
         /// </summary>
-        public List<DscResourcePropertyInfo> PropertiesAsResourceInfo => Properties.ConvertAll(prop => (DscResourcePropertyInfo)prop);
+        public IList<DscResourcePropertyInfo> PropertiesAsResourceInfo => _propertiesAsResourceInfo;
 
         /// <summary>
-        /// Gets or sets properties of the resource
+        /// Gets the properties of the resource as a loosely typed list. This shape exists for
+        /// Windows PowerShell interop, where the DSCResourcePropertyInfo type from
+        /// Microsoft.Windows.DSC.CoreConfProviders.dll is incompatible with our own.
         /// </summary>
-        public List<object> Properties { get; private set; }
+        public List<object> Properties => _properties;
+
+        /// <summary>
+        /// Adds a property to the resource.
+        /// </summary>
+        /// <param name="property">Property to add</param>
+        public void AddProperty(DscResourcePropertyInfo property) => _properties.Add(property);
 
         /// <summary>
         /// Gets or sets implementation detail (e.g., "ScriptBased", "ClassBased")
@@ -133,16 +147,38 @@ namespace Microsoft.PowerShell.DesiredStateConfiguration
         /// <param name="properties">Updated properties</param>
         public void UpdateProperties(List<DscResourcePropertyInfo> properties)
         {
-            Properties = properties.ConvertAll(prop => (object)prop);
+            // Refill rather than reassign, so anything already holding Properties or
+            // PropertiesAsResourceInfo keeps observing this resource.
+            _properties.Clear();
+            _properties.AddRange(properties);
         }
 
         /// <summary>
         /// Updates properties of the resource.
         /// </summary>
         /// <param name="properties">Updated properties</param>
+        /// <exception cref="InvalidCastException">
+        /// An element is not a <see cref="DscResourcePropertyInfo"/>.
+        /// </exception>
         public void UpdateProperties(List<object> properties)
         {
-            Properties = properties;
+            if (ReferenceEquals(properties, _properties))
+            {
+                return;
+            }
+
+            // Validate up front so a bad element leaves the existing properties untouched.
+            foreach (object property in properties)
+            {
+                if (property is not null and not DscResourcePropertyInfo)
+                {
+                    throw new InvalidCastException(
+                        $"Cannot store an object of type '{property.GetType().FullName}' as a DSC resource property.");
+                }
+            }
+
+            _properties.Clear();
+            _properties.AddRange(properties);
         }
     }
 
@@ -156,18 +192,17 @@ namespace Microsoft.PowerShell.DesiredStateConfiguration
         /// </summary>
         public DscResourcePropertyInfo()
         {
-            Values = [];
         }
 
         /// <summary>
         /// Gets or sets name of the property
         /// </summary>
-        public string Name { get; set; }
+        public string? Name { get; set; }
 
         /// <summary>
         /// Gets or sets type of the property
         /// </summary>
-        public string PropertyType { get; set; }
+        public string? PropertyType { get; set; }
 
         /// <summary>
         /// Gets or sets a value indicating whether the property is mandatory or not
@@ -177,6 +212,6 @@ namespace Microsoft.PowerShell.DesiredStateConfiguration
         /// <summary>
         /// Gets Values for a resource property
         /// </summary>
-        public List<string> Values { get; set; }
+        public List<string> Values { get; set; } = [];
     }
 }

@@ -13,9 +13,19 @@ namespace DSCParser.PSDSC
     /// <summary>
     /// Helper methods for DSC resource operations
     /// </summary>
-    internal static partial class DscResourceHelpers
+    internal static class DscResourceHelpers
     {
-        private static readonly Regex SchemaMofRegex = new(@"\.schema\.mof$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        private const string SchemaMofExtension = ".schema.mof";
+        private const string SchemaPsm1Extension = ".schema.psm1";
+
+        private static readonly string[] ResourceModuleExtensions = [".psd1", ".psm1", ".dll", ".cdxml"];
+
+        private static readonly Regex DscResourcesToExportRegex =
+            new(@"^\s*DscResourcesToExport\s*=", RegexOptions.Multiline | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+        // Schema file path -> owning module, for the duration of one discovery run. GetModule probes
+        // the file system, and hundreds of keywords typically resolve to a handful of module bases.
+        private static readonly Dictionary<string, PSModuleInfo?> ModuleCache = new(StringComparer.OrdinalIgnoreCase);
 
         // Hidden resources that should not be returned to users
         private static readonly HashSet<string> HiddenResources = new(StringComparer.OrdinalIgnoreCase)
@@ -55,7 +65,8 @@ namespace DSCParser.PSDSC
         public static bool IsHiddenResource(string resourceName) => HiddenResources.Contains(resourceName);
 
         /// <summary>
-        /// Checks whether an input name matches one of the patterns
+        /// Checks whether an input name matches one of the patterns. Patterns use PowerShell
+        /// wildcard syntax, matching the -Name parameter contract of Get-DscResourceV2.
         /// </summary>
         public static bool IsPatternMatched(string[] patterns, string name)
         {
@@ -66,7 +77,7 @@ namespace DSCParser.PSDSC
 
             foreach (var pattern in patterns)
             {
-                if (Regex.IsMatch(name, pattern, RegexOptions.IgnoreCase))
+                if (WildcardPattern.Get(pattern, WildcardOptions.IgnoreCase | WildcardOptions.CultureInvariant).IsMatch(name))
                 {
                     return true;
                 }
@@ -85,19 +96,32 @@ namespace DSCParser.PSDSC
                 return null;
             }
 
-            // Try .psd1 first
-            var moduleFileName = SchemaMofRegex.Replace(schemaFileName, "") + ".psd1";
+            var stem = TrimSuffix(schemaFileName, SchemaMofExtension);
+
+            var moduleFileName = stem + ".psd1";
             if (File.Exists(moduleFileName))
             {
                 return moduleFileName;
             }
 
-            // Try .psm1
-            moduleFileName = SchemaMofRegex.Replace(schemaFileName, "") + ".psm1";
+            moduleFileName = stem + ".psm1";
             return File.Exists(moduleFileName)
                 ? moduleFileName
                 : null;
         }
+
+        private static string TrimSuffix(string value, string suffix)
+        {
+            return value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
+                ? value.Substring(0, value.Length - suffix.Length)
+                : value;
+        }
+
+        /// <summary>
+        /// Drops the per-discovery-run module resolution cache. Must be called when discovery ends so
+        /// a later run does not observe stale module or file-system state.
+        /// </summary>
+        public static void ClearModuleCache() => ModuleCache.Clear();
 
         /// <summary>
         /// Gets module for a DSC resource from schema file
@@ -109,14 +133,26 @@ namespace DSCParser.PSDSC
                 return null;
             }
 
-            string? schemaFileExt = null;
-            if (schemaFileName!.Contains(".schema.mof", StringComparison.OrdinalIgnoreCase))
+            if (ModuleCache.TryGetValue(schemaFileName!, out var cached))
             {
-                schemaFileExt = ".schema.mof";
+                return cached;
             }
-            else if (schemaFileName!.Contains(".schema.psm1", StringComparison.OrdinalIgnoreCase))
+
+            var resolved = ResolveModule(modules, schemaFileName!);
+            ModuleCache[schemaFileName!] = resolved;
+            return resolved;
+        }
+
+        private static PSModuleInfo? ResolveModule(PSModuleInfo[] modules, string schemaFileName)
+        {
+            string? schemaFileExt = null;
+            if (schemaFileName.Contains(SchemaMofExtension, StringComparison.OrdinalIgnoreCase))
             {
-                schemaFileExt = ".schema.psm1";
+                schemaFileExt = SchemaMofExtension;
+            }
+            else if (schemaFileName.Contains(SchemaPsm1Extension, StringComparison.OrdinalIgnoreCase))
+            {
+                schemaFileExt = SchemaPsm1Extension;
             }
 
             if (schemaFileExt is null)
@@ -147,14 +183,9 @@ namespace DSCParser.PSDSC
                     m.ModuleBase is not null &&
                     m.ModuleBase.Equals(moduleBase, StringComparison.OrdinalIgnoreCase));
 
-                if (result is not null)
+                if (result is not null && ValidateResourceModule(schemaFileName, schemaFileExt))
                 {
-                    // Validate it's a proper resource module
-                    var validResource = ValidateResourceModule(schemaFileName!, schemaFileExt);
-                    if (validResource)
-                    {
-                        return result;
-                    }
+                    return result;
                 }
             }
             catch
@@ -176,12 +207,10 @@ namespace DSCParser.PSDSC
                 return true;
             }
 
-            // Check for proper resource module files
-            var extensions = new[] { ".psd1", ".psm1", ".dll", ".cdxml" };
-            foreach (var ext in extensions)
+            var stem = TrimSuffix(schemaFileName, schemaFileExt);
+            foreach (var ext in ResourceModuleExtensions)
             {
-                var resModuleFileName = Regex.Replace(schemaFileName, schemaFileExt + "$", "", RegexOptions.IgnoreCase) + ext;
-                if (File.Exists(resModuleFileName))
+                if (File.Exists(stem + ext))
                 {
                     return true;
                 }
@@ -218,20 +247,20 @@ namespace DSCParser.PSDSC
                     {
                         var addModule = false;
                         var moduleName = Path.GetFileName(moduleFolder);
+                        string[]? subFolders = null;
 
                         // Check for DscResources folder
-                        var dscResourcesPath = Path.Combine(moduleFolder, "DscResources");
-                        if (Directory.Exists(dscResourcesPath))
+                        if (Directory.Exists(Path.Combine(moduleFolder, "DscResources")))
                         {
                             addModule = true;
                         }
                         else
                         {
                             // Check for nested DscResources folders (one level deep)
-                            foreach (var subFolder in Directory.GetDirectories(moduleFolder))
+                            subFolders = Directory.GetDirectories(moduleFolder);
+                            foreach (var subFolder in subFolders)
                             {
-                                var nestedDscPath = Path.Combine(subFolder, "DscResources");
-                                if (Directory.Exists(nestedDscPath))
+                                if (Directory.Exists(Path.Combine(subFolder, "DscResources")))
                                 {
                                     addModule = true;
                                     break;
@@ -247,8 +276,7 @@ namespace DSCParser.PSDSC
 
                             if (psd1Files.Length == 0)
                             {
-                                // Check one level deep
-                                foreach (var subFolder in Directory.GetDirectories(moduleFolder))
+                                foreach (var subFolder in subFolders ?? Directory.GetDirectories(moduleFolder))
                                 {
                                     psd1Files = Directory.GetFiles(subFolder, psd1Pattern, SearchOption.TopDirectoryOnly);
                                     if (psd1Files.Length > 0) break;
@@ -259,8 +287,7 @@ namespace DSCParser.PSDSC
                             {
                                 try
                                 {
-                                    var content = File.ReadAllText(psd1File);
-                                    if (Regex.IsMatch(content, @"^\s*DscResourcesToExport\s*=", RegexOptions.Multiline))
+                                    if (DscResourcesToExportRegex.IsMatch(File.ReadAllText(psd1File)))
                                     {
                                         addModule = true;
                                         break;
@@ -291,49 +318,18 @@ namespace DSCParser.PSDSC
         /// <summary>
         /// Converts MOF type constraint to PowerShell type name
         /// </summary>
-        public static string ConvertTypeConstraintToTypeName(string typeConstraint, string[] dscResourceNames)
+        public static string ConvertTypeConstraintToTypeName(string typeConstraint)
         {
             if (ConvertTypeMap.TryGetValue(typeConstraint, out var mappedType))
             {
                 return mappedType;
             }
 
-            // Try to convert using PowerShell type conversion
-            var type = ConvertCimTypeNameToPSTypeName(typeConstraint);
+            var type = LanguagePrimitives.ConvertTypeNameToPSTypeName(typeConstraint);
 
-            if (!string.IsNullOrEmpty(type))
-            {
-                return type;
-            }
-
-            // Check if it's a DSC resource type
-            foreach (var resourceName in dscResourceNames)
-            {
-                if (typeConstraint.Equals(resourceName, StringComparison.OrdinalIgnoreCase) ||
-                    typeConstraint.Equals(resourceName + "[]", StringComparison.OrdinalIgnoreCase))
-                {
-                    return $"[{typeConstraint}]";
-                }
-            }
-
-            return $"[{typeConstraint}]";
-        }
-
-        /// <summary>
-        /// Converts CIM type name to PowerShell type name
-        /// </summary>
-        private static string ConvertCimTypeNameToPSTypeName(string cimTypeName)
-        {
-            Dictionary<string, string> convertTypeMap = new()
-            {
-                ["MSFT_Credential"] = "[PSCredential]",
-                ["MSFT_KeyValuePair"] = "[HashTable]",
-                ["MSFT_KeyValuePair[]"] = "[HashTable]"
-            };
-
-            return convertTypeMap.TryGetValue(cimTypeName, out var mappedType)
-                ? mappedType
-                : LanguagePrimitives.ConvertTypeNameToPSTypeName(cimTypeName);
+            return string.IsNullOrEmpty(type)
+                ? $"[{typeConstraint}]"
+                : type;
         }
 
         /// <summary>

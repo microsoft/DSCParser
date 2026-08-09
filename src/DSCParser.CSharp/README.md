@@ -44,16 +44,16 @@ Modules/DSCParser/
 1. Navigate to the root directory:
 
    ```powershell
-   cd DSCParser.CSharp
+   cd DSCParser
    ```
 
 2. Build the project using the provided script:
 
    ```powershell
-   .\Build.ps1 -Configuration Release
+   .\Utilities\Build.ps1 -Configuration Release
    ```
 
-   This will build the netstandard2.0 version and copy it to the `.\DSCParser.CSharp\PowerShellModule` module directory.
+   This will build the netstandard2.0 assemblies and copy them to the `.\DSCParser` module directory.
 
 ## Installation
 
@@ -61,7 +61,7 @@ After building, import the module in either Windows PowerShell 5.1 or PowerShell
 
 ```powershell
 # Works in both Windows PowerShell 5.1 and PowerShell 7+
-Import-Module .\DSCParser.CSharp\PowerShellModule\DSCParser.CSharp.psd1
+Import-Module .\DSCParser\DSCParser.psd1
 ```
 
 The module automatically detects which PowerShell version you're using and loads the appropriate assembly:
@@ -149,7 +149,7 @@ If you get an error about the assembly not being found:
 
 ```powershell
 # Ensure the assembly is built and copied to the correct location
-$assemblyPath = "DSCParser.CSharp\PowerShellModule\bin\DSCParser.CSharp.dll"
+$assemblyPath = "DSCParser\bin\DSCParser.CSharp.dll"
 Test-Path $assemblyPath
 ```
 

@@ -93,6 +93,8 @@ namespace DSCParser.PSDSC
             {
                 WriteVerbose("Discovering DSC resources...");
 
+                DscResourceService.WarningSink = WriteWarning;
+
                 if (Name is not null && Name.Length > 0)
                 {
                     WriteVerbose($"Filtering resources by names: {string.Join(", ", Name)}");
@@ -135,6 +137,10 @@ namespace DSCParser.PSDSC
                     ErrorCategory.InvalidOperation,
                     null));
             }
+            finally
+            {
+                DscResourceService.WarningSink = null;
+            }
         }
 
         #endregion
@@ -154,8 +160,8 @@ namespace DSCParser.PSDSC
             foreach (var name in namesWithoutWildcards)
             {
                 var found = resources.Any(r =>
-                    r.Name.Equals(name, StringComparison.OrdinalIgnoreCase) ||
-                    r.ResourceType.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(r.ResourceType, name, StringComparison.OrdinalIgnoreCase));
 
                 if (!found)
                 {
