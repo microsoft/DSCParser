@@ -1,4 +1,3 @@
-using Microsoft.Management.Infrastructure;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -9,6 +8,7 @@ using System.Management.Automation;
 using System.Management.Automation.Language;
 using System.Text;
 using System.Text.RegularExpressions;
+using DSCParser.PSDSC;
 using DscResourceInfo = Microsoft.PowerShell.DesiredStateConfiguration.DscResourceInfo;
 using DscResourcePropertyInfo = Microsoft.PowerShell.DesiredStateConfiguration.DscResourcePropertyInfo;
 
@@ -19,10 +19,63 @@ namespace DSCParser.CSharp
     /// </summary>
     public static class DscParser
     {
-        private static readonly Dictionary<string, CimClass> _cimClasses = new(StringComparer.InvariantCultureIgnoreCase);
-        private static readonly Dictionary<string, DscResourceInfo> _dscResources = new(StringComparer.InvariantCultureIgnoreCase);
-        private static readonly Dictionary<string, string> _mofSchemas = new(StringComparer.InvariantCultureIgnoreCase);
-        private static readonly Dictionary<string, Dictionary<string, DscResourcePropertyInfo>> _resourcePropertyCache = new(StringComparer.InvariantCultureIgnoreCase);
+        private static readonly Dictionary<string, DscResourceInfo> _dscResources = new(StringComparer.OrdinalIgnoreCase);
+
+        // Module name -> whether more than one version is installed. Enumerating PSModulePath is
+        // expensive and it does not change within a process, so the verdict is reused across the many
+        // ConvertToDscObject calls a single export produces. ClearCaches resets it.
+        private static readonly Dictionary<string, bool> _moduleHasMultipleVersions = new(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly Regex ImportDscResourceVersionRegex = new(
+            @"(import-dscresource\b[^\n]*?)\s+-moduleversion\s+(?:""[^""]*""|'[^']*'|\S+)([^\n]*)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+        private static readonly Regex ImportDscResourceStatementRegex = new(
+            @"^[ \t]*import-dscresource\b([^\r\n]*)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Multiline | RegexOptions.Compiled);
+
+        private const string ImportDscResourcePlaceholder = "DscParserImportDscResource";
+
+        /// <summary>
+        /// Receives non-fatal diagnostics such as unresolvable modules. When unset, they are dropped
+        /// rather than written to the console, which would corrupt a PowerShell host's output stream.
+        /// </summary>
+        public static Action<string>? WarningSink { get; set; }
+
+        /// <summary>
+        /// Clears the process-wide resource, property and module caches.
+        /// </summary>
+        public static void ClearCaches()
+        {
+            _dscResources.Clear();
+            _moduleHasMultipleVersions.Clear();
+            DscKeywordRegistry.Reset();
+        }
+
+        private static void ReportWarning(string message) => WarningSink?.Invoke(message);
+
+        // A configuration exported by an older module version references resources and properties the
+        // installed version no longer has. Warn and convert what is left instead of failing outright.
+        private static readonly HashSet<string> RecoverableParseErrorIds = new(StringComparer.Ordinal)
+        {
+            "ResourceNotDefined",
+            "InvalidInstanceProperty"
+        };
+
+        private static bool IsRecoverableParseError(ParseError error)
+        {
+            return RecoverableParseErrorIds.Contains(error.ErrorId) ||
+                   error.Message.Contains("Could not find the module") ||
+                   error.Message.Contains("Undefined DSC resource");
+        }
+
+        private static string DescribeParseError(ParseError error)
+        {
+            // The raw message lists every valid member, which is too noisy to surface.
+            return error.ErrorId.Equals("InvalidInstanceProperty", StringComparison.Ordinal)
+                ? $"Property '{error.Extent.Text}' (line {error.Extent.StartLineNumber}) does not exist on its resource in the installed module version."
+                : error.Message;
+        }
 
         /// <summary>
         /// Converts a DSC configuration file or content to DSC objects
@@ -36,18 +89,25 @@ namespace DSCParser.CSharp
                 throw new InvalidOperationException("No DSC resources loaded. Please provide DSC resources to parse the configuration.");
             }
 
-            List<DscResourceInfo> dscResourcesConverted = [];
+            List<DscResourceInfo> dscResourcesConverted;
             if (dscResources is not null)
             {
-                dscResources.ForEach(r =>
+                dscResourcesConverted = new List<DscResourceInfo>(dscResources.Count);
+                foreach (object resource in dscResources)
                 {
-                    _dscResources[((dynamic)r).Name] = DscResourceInfoMapper.MapPSObjectToResourceInfo(r);
-                    dscResourcesConverted.Add(_dscResources[((dynamic)r).Name]);
-                });
+                    DscResourceInfo mapped = DscResourceInfoMapper.MapPSObjectToResourceInfo(resource);
+                    if (string.IsNullOrEmpty(mapped.Name))
+                    {
+                        throw new InvalidOperationException("A supplied DSC resource has no Name and cannot be used for parsing.");
+                    }
+
+                    _dscResources[mapped.Name!] = mapped;
+                    dscResourcesConverted.Add(mapped);
+                }
             }
             else
             {
-                dscResourcesConverted = _dscResources.Values.ToList();
+                dscResourcesConverted = [.. _dscResources.Values];
             }
 
             if (string.IsNullOrEmpty(path) && string.IsNullOrEmpty(content))
@@ -58,76 +118,37 @@ namespace DSCParser.CSharp
             string dscContent = string.IsNullOrEmpty(content) ? File.ReadAllText(path!) : content;
             string errorPrefix = string.IsNullOrEmpty(path) ? string.Empty : $"{path} - ";
 
-            List<string> modulesToRemoveVersionFrom = dscResourcesConverted
-                .Select(r => r.Module?.Name)
-                .Where(m => m is not null)
-                .Distinct()
-                .ToList();
-
-            using PowerShell ps = PowerShell.Create();
-            List<string> modulesWithMultipleVersions = [];
-            foreach (string module in modulesToRemoveVersionFrom)
+            HashSet<string> referencedModules = new(StringComparer.OrdinalIgnoreCase);
+            foreach (DscResourceInfo resource in dscResourcesConverted)
             {
-                ps.AddCommand("Get-Module")
-                    .AddParameter("Name", module)
-                    .AddParameter("ListAvailable");
-
-                Collection<PSObject> moduleInfo = ps.Invoke();
-                HashSet<string> versionsFound = new(StringComparer.InvariantCultureIgnoreCase);
-                foreach (PSObject mod in moduleInfo)
+                string? moduleName = resource.Module?.Name;
+                if (!string.IsNullOrEmpty(moduleName))
                 {
-                    string version = mod.Members["Version"]?.Value?.ToString() ?? string.Empty;
-                    if (!string.IsNullOrEmpty(version))
-                    {
-                        _ = versionsFound.Add(version);
-                    }
-                }
-                if (versionsFound.Count > 1)
-                {
-                    modulesWithMultipleVersions.Add(module);
-                }
-                ps.Commands.Clear();
-            }
-
-            foreach (string module in modulesWithMultipleVersions)
-            {
-                if (modulesToRemoveVersionFrom.Contains(module))
-                {
-                    _ = modulesToRemoveVersionFrom.Remove(module);
+                    _ = referencedModules.Add(moduleName!);
                 }
             }
 
-            // Remove module version information
+            List<string> modulesToRemoveVersionFrom = GetSingleVersionModules(referencedModules);
+
             dscContent = RemoveModuleVersionInfo(dscContent, modulesToRemoveVersionFrom);
 
-            // Initialize CIM classes cache
-            // InitializeCimClasses();
+            List<ModuleReference> modulesToLoad = GetModulesToLoad(dscContent);
+            RegisterKeywords(modulesToLoad, errorPrefix);
 
-            // Parse the DSC configuration using PowerShell AST
-            ScriptBlockAst ast = Parser.ParseInput(dscContent, out Token[] tokens, out ParseError[] parseErrors);
-
-            // Check for parse errors
-            foreach (ParseError error in parseErrors)
-            {
-                if (error.Message.Contains("Could not find the module") ||
-                    error.Message.Contains("Undefined DSC resource"))
-                {
-                    Console.WriteLine($"Warning: {errorPrefix}Failed to find module or DSC resource: {error.Message}");
-                }
-                else
-                {
-                    throw new InvalidOperationException($"{errorPrefix}Error parsing configuration: {error.Message}");
-                }
-            }
+            // Parse the DSC configuration using PowerShell AST instead of with "Import-DscResource"
+            // to avoid loading modules from disk, which may be very slow with many class-based resources
+            ScriptBlockAst ast = Parser.ParseInput(
+                RemoveImportDscResourceStatements(dscContent), out Token[] tokens, out ParseError[] parseErrors);
 
             // Find the Configuration definition
-            if (ast.Find(a => a is ConfigurationDefinitionAst, false) is not ConfigurationDefinitionAst configAst)
+            ConfigurationDefinitionAst? configAst = ast.Find(a => a is ConfigurationDefinitionAst, false) as ConfigurationDefinitionAst;
+
+            ReportParseErrors(parseErrors, configAst, errorPrefix);
+
+            if (configAst is null)
             {
                 throw new InvalidOperationException("No Configuration definition found in the DSC content");
             }
-
-            // Get modules to load
-            List<Dictionary<string, object>> modulesToLoad = GetModulesToLoad(configAst);
 
             // Initialize DSC resources
             InitializeDscResources(modulesToLoad, dscResourcesConverted);
@@ -151,47 +172,60 @@ namespace DSCParser.CSharp
         public static string ConvertFromDscObject(IEnumerable<Hashtable> dscResources, int childLevel = 0)
         {
             StringBuilder result = new();
-            string[] parametersToSkip = ["ResourceInstanceName", "CIMInstance"];
-            if (childLevel == 0)
-                parametersToSkip = [..parametersToSkip, "ResourceName"];
+            AppendDscObjects(result, dscResources, childLevel);
+            return result.ToString();
+        }
 
+        /// <summary>
+        /// Renders resources into <paramref name="result"/>. Nested hashtables and arrays recurse into
+        /// the same builder, so no intermediate strings are produced per nesting level.
+        /// </summary>
+        private static void AppendDscObjects(StringBuilder result, IEnumerable<Hashtable> dscResources, int childLevel)
+        {
             string childSpacer = new(' ', childLevel * 4);
 
             foreach (Hashtable entry in dscResources)
             {
-                int longestParameter = entry.Keys.Cast<string>().Max(k => k.Length);
+                List<string> sortedKeys = [];
+                int longestParameter = 0;
+                foreach (string key in entry.Keys)
+                {
+                    sortedKeys.Add(key);
+                    if (key.Length > longestParameter)
+                    {
+                        longestParameter = key.Length;
+                    }
+                }
+                sortedKeys.Sort(StringComparer.Ordinal);
 
                 if (entry.ContainsKey("CIMInstance"))
                 {
-                    _ = result.AppendLine($"{childSpacer}{entry["CIMInstance"]}{{");
+                    _ = result.Append(childSpacer).Append(entry["CIMInstance"]).AppendLine("{");
                 }
                 else if (entry.ContainsKey("ResourceName") && entry.ContainsKey("ResourceInstanceName"))
                 {
-                    _ = result.AppendLine($"{childSpacer}{entry["ResourceName"]} \"{entry["ResourceInstanceName"]}\"");
-                    _ = result.AppendLine($"{childSpacer}{{");
+                    _ = result.Append(childSpacer).Append(entry["ResourceName"]).Append(" \"").Append(entry["ResourceInstanceName"]).AppendLine("\"");
+                    _ = result.Append(childSpacer).AppendLine("{");
                 }
                 else
                 {
-                    _ = result.AppendLine($"{childSpacer}@{{");
+                    _ = result.Append(childSpacer).AppendLine("@{");
                 }
-
-                List<string> sortedKeys = [.. entry.Keys.Cast<string>().OrderBy(k => k)];
 
                 foreach (string property in sortedKeys)
                 {
-                    if (parametersToSkip.Contains(property)) continue;
+                    if (property is "ResourceInstanceName" or "CIMInstance" ||
+                        (childLevel == 0 && property is "ResourceName"))
+                    {
+                        continue;
+                    }
 
                     string additionalSpaces = new(' ', longestParameter - property.Length + 1);
-                    object value = entry[property];
-
-                    _ = result.Append(FormatProperty(property, value, additionalSpaces, childSpacer));
+                    AppendProperty(result, property, entry[property], additionalSpaces, childSpacer, childLevel);
                 }
 
-                _ = result.Append($"{childSpacer}}}");
-                _ = result.Append(Environment.NewLine);
+                _ = result.Append(childSpacer).Append('}').Append(Environment.NewLine);
             }
-
-            return result.ToString();
         }
 
         private static string RemoveModuleVersionInfo(string content, List<string>? uniqueModules = null)
@@ -201,114 +235,224 @@ namespace DSCParser.CSharp
                 return content;
             }
 
-            string pattern = @"(import-dscresource\b[^\n]*?)\s+-moduleversion\s+(?:""[^""]*""|'[^']*'|\S+)([^\n]*)";
-            return Regex.Replace(content, pattern, match =>
+            return ImportDscResourceVersionRegex.Replace(content, match =>
             {
                 string fullLine = match.Value;
                 foreach (string module in uniqueModules)
                 {
-                    if (fullLine.IndexOf(module, StringComparison.CurrentCultureIgnoreCase) >= 0)
+                    if (fullLine.IndexOf(module, StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         return match.Groups[1].Value + match.Groups[2].Value;
                     }
                 }
                 return fullLine;
-            }, RegexOptions.IgnoreCase);
+            });
         }
 
-        private static void InitializeCimClasses()
+        /// <summary>
+        /// Returns the subset of <paramref name="moduleNames"/> that has exactly one version installed.
+        /// Only those may have their -ModuleVersion stripped from the configuration; for modules with
+        /// several versions installed the version is what selects the right one.
+        /// </summary>
+        private static List<string> GetSingleVersionModules(HashSet<string> moduleNames)
         {
-            try
+            List<string> unresolved = [];
+            foreach (string moduleName in moduleNames)
             {
-                using CimSession session = CimSession.Create(null);
-                IEnumerable<CimClass> classes = session.EnumerateClasses("ROOT/Microsoft/Windows/DesiredStateConfiguration");
-                foreach (CimClass? cimClass in classes)
+                if (!_moduleHasMultipleVersions.ContainsKey(moduleName))
                 {
-                    if (!_cimClasses.ContainsKey(cimClass.CimSystemProperties.ClassName))
-                    {
-                        _cimClasses.Add(cimClass.CimSystemProperties.ClassName, cimClass);
-                    }
+                    unresolved.Add(moduleName);
                 }
             }
-            catch (Exception ex)
+
+            if (unresolved.Count > 0)
             {
-                Console.WriteLine($"Warning: Could not enumerate CIM classes: {ex.Message}");
+                Dictionary<string, HashSet<string>> versionsByModule = new(StringComparer.OrdinalIgnoreCase);
+
+                using (PowerShell ps = PowerShell.Create())
+                {
+                    _ = ps.AddCommand("Get-Module")
+                        .AddParameter("Name", unresolved.ToArray())
+                        .AddParameter("ListAvailable");
+
+                    foreach (PSObject module in ps.Invoke())
+                    {
+                        string? name = module.Members["Name"]?.Value?.ToString();
+                        string? version = module.Members["Version"]?.Value?.ToString();
+                        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(version))
+                        {
+                            continue;
+                        }
+
+                        if (!versionsByModule.TryGetValue(name!, out HashSet<string>? versions))
+                        {
+                            versions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            versionsByModule[name!] = versions;
+                        }
+                        _ = versions.Add(version!);
+                    }
+                }
+
+                foreach (string moduleName in unresolved)
+                {
+                    _moduleHasMultipleVersions[moduleName] =
+                        versionsByModule.TryGetValue(moduleName, out HashSet<string>? found) && found.Count > 1;
+                }
             }
+
+            List<string> singleVersionModules = [];
+            foreach (string moduleName in moduleNames)
+            {
+                if (!_moduleHasMultipleVersions[moduleName])
+                {
+                    singleVersionModules.Add(moduleName);
+                }
+            }
+
+            return singleVersionModules;
         }
 
-        private static List<Dictionary<string, object>> GetModulesToLoad(ConfigurationDefinitionAst configAst)
+        /// <summary>
+        /// Reads the Import-DSCResource statements straight from the configuration text, so the
+        /// keywords can be registered before the configuration is parsed and the statements removed
+        /// from that parse.
+        /// </summary>
+        private static List<ModuleReference> GetModulesToLoad(string content)
         {
-            List<Dictionary<string, object>> modulesToLoad = [];
-            List<DynamicKeywordStatementAst> statements = configAst.Body.ScriptBlock.EndBlock.Statements
-                .Select(statement => statement as DynamicKeywordStatementAst)
-                .Where(statement => statement is not null).ToList();
+            List<ModuleReference> modulesToLoad = [];
 
-            foreach (DynamicKeywordStatementAst statement in statements)
+            foreach (Match statement in ImportDscResourceStatementRegex.Matches(content))
             {
-                foreach (CommandElementAst command in statement.CommandElements)
-                {
-                    StringConstantExpressionAst? expression = command as StringConstantExpressionAst;
-                    if (expression?.Value.Equals("Import-DSCResource", StringComparison.OrdinalIgnoreCase) ?? false )
-                    {
-                        Dictionary<string, object> currentModule = [];
-                        for (int i = 0; i < statement.CommandElements.Count; i++)
-                        {
-                            if (statement.CommandElements[i] is CommandParameterAst param)
-                            {
-                                if (param.ParameterName == "ModuleName" && i + 1 < statement.CommandElements.Count)
-                                {
-                                    if (statement.CommandElements[i + 1] is StringConstantExpressionAst moduleName)
-                                    {
-                                        currentModule["ModuleName"] = moduleName.Value;
-                                    }
-                                }
-                                else if (param.ParameterName == "ModuleVersion" && i + 1 < statement.CommandElements.Count)
-                                {
-                                    if (statement.CommandElements[i + 1] is StringConstantExpressionAst moduleVersion)
-                                    {
-                                        currentModule["ModuleVersion"] = moduleVersion.Value;
-                                    }
-                                }
-                            }
-                        }
+                ScriptBlockAst statementAst = Parser.ParseInput(
+                    ImportDscResourcePlaceholder + statement.Groups[1].Value, out Token[] _, out ParseError[] _);
 
-                        if (currentModule.Count > 0)
-                        {
-                            modulesToLoad.Add(currentModule);
-                        }
+                if (statementAst.Find(a => a is CommandAst, true) is not CommandAst command)
+                {
+                    continue;
+                }
+
+                ReadOnlyCollection<CommandElementAst> elements = command.CommandElements;
+
+                string? moduleName = null;
+                Version? moduleVersion = null;
+
+                for (int i = 1; i < elements.Count - 1; i++)
+                {
+                    if (elements[i] is not CommandParameterAst param ||
+                        elements[i + 1] is not StringConstantExpressionAst value)
+                    {
+                        continue;
                     }
+
+                    if (param.ParameterName.Equals("ModuleName", StringComparison.OrdinalIgnoreCase))
+                    {
+                        moduleName = value.Value;
+                    }
+                    else if (param.ParameterName.Equals("ModuleVersion", StringComparison.OrdinalIgnoreCase) &&
+                             Version.TryParse(value.Value, out Version? parsed))
+                    {
+                        moduleVersion = parsed;
+                    }
+                }
+
+                if (moduleName is not null)
+                {
+                    modulesToLoad.Add(new ModuleReference(moduleName, moduleVersion));
                 }
             }
 
             return modulesToLoad;
         }
 
-        private static void InitializeDscResources(List<Dictionary<string, object>> modulesToLoad, List<DscResourceInfo> allDscResources)
+        private static string RemoveImportDscResourceStatements(string content)
         {
-            allDscResources.Where(r =>
-                modulesToLoad.Any(m =>
-                    m.ContainsKey("ModuleName") &&
-                    (r.Module?.Name.Equals(m["ModuleName"].ToString(), StringComparison.OrdinalIgnoreCase) ?? false) &&
-                    (!m.ContainsKey("ModuleVersion") ||
-                     (r.Module?.Version.Equals(new(m["ModuleVersion"].ToString())) ?? false))
-                )
-            ).ToList().ForEach(r =>
+            return ImportDscResourceStatementRegex.Replace(content, string.Empty);
+        }
+
+        private static void RegisterKeywords(List<ModuleReference> modulesToLoad, string errorPrefix)
+        {
+            foreach (ModuleReference reference in modulesToLoad)
             {
-                if (_dscResources.ContainsKey(r.Name)) return;
-                _dscResources.Add(r.Name, r);
-            });
+                if (!DscKeywordRegistry.EnsureRegistered(reference.Name, reference.Version))
+                {
+                    string version = reference.Version is null ? string.Empty : $", {reference.Version}";
+                    ReportWarning($"{errorPrefix}Could not find the module '<{reference.Name}{version}>'.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Errors outside the configuration block never affected the conversion, and registering the
+        /// keywords up front makes PowerShell report some constructs that follow the block, such as the
+        /// trailing invocation an export appends, as errors. Only errors inside the block are fatal.
+        /// </summary>
+        private static void ReportParseErrors(ParseError[] parseErrors, ConfigurationDefinitionAst? configAst, string errorPrefix)
+        {
+            foreach (ParseError error in parseErrors)
+            {
+                if (configAst is not null &&
+                    (error.Extent.StartOffset < configAst.Extent.StartOffset ||
+                     error.Extent.EndOffset > configAst.Extent.EndOffset))
+                {
+                    continue;
+                }
+
+                if (IsRecoverableParseError(error))
+                {
+                    ReportWarning($"{errorPrefix}{DescribeParseError(error)}");
+                }
+                else
+                {
+                    throw new InvalidOperationException($"{errorPrefix}Error parsing configuration: {error.Message}");
+                }
+            }
+        }
+
+        private static void InitializeDscResources(List<ModuleReference> modulesToLoad, List<DscResourceInfo> allDscResources)
+        {
+            if (modulesToLoad.Count == 0)
+            {
+                return;
+            }
+
+            foreach (DscResourceInfo resource in allDscResources)
+            {
+                PSModuleInfo? module = resource.Module;
+                if (module is null || string.IsNullOrEmpty(resource.Name) || _dscResources.ContainsKey(resource.Name!))
+                {
+                    continue;
+                }
+
+                foreach (ModuleReference reference in modulesToLoad)
+                {
+                    if (module.Name.Equals(reference.Name, StringComparison.OrdinalIgnoreCase) &&
+                        (reference.Version is null || reference.Version.Equals(module.Version)))
+                    {
+                        _dscResources.Add(resource.Name!, resource);
+                        break;
+                    }
+                }
+            }
+        }
+
+        private readonly struct ModuleReference(string name, Version? version)
+        {
+            public string Name { get; } = name;
+
+            public Version? Version { get; } = version;
         }
 
         private static List<DscResourceInstance> GetResourceInstances(ConfigurationDefinitionAst configAst, DscParseOptions? options = null)
         {
             // Try to find Node statement first
-            DynamicKeywordStatementAst? dynamicNodeStatement = configAst.Body.ScriptBlock.EndBlock.Statements
-                .Where(ast => ast is DynamicKeywordStatementAst dynAst &&
+            DynamicKeywordStatementAst dynamicNodeStatement = configAst.Body.ScriptBlock.EndBlock.Statements
+                .OfType<DynamicKeywordStatementAst>()
+                .FirstOrDefault(dynAst =>
+                        dynAst.CommandElements.Count > 0 &&
                         dynAst.CommandElements[0] is StringConstantExpressionAst constant &&
                         constant.StringConstantType == StringConstantType.BareWord &&
-                        constant.Value.Equals("Node", StringComparison.CurrentCultureIgnoreCase))
-                .Select(ast => (DynamicKeywordStatementAst)ast)
-                .FirstOrDefault() ?? throw new InvalidOperationException("No Node statement found in the DSC configuration");
+                        constant.Value.Equals("Node", StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException("No Node statement found in the DSC configuration");
 
             List<DscResourceInstance> result = [];
 
@@ -318,8 +462,14 @@ namespace DSCParser.CSharp
                 ?? throw new InvalidOperationException("Failed to parse Node body statements in DSC configuration.");
             ReadOnlyCollection<StatementAst> resourceInstancesInNode = scriptBlockBody.Statements;
 
-            foreach (DynamicKeywordStatementAst resource in resourceInstancesInNode.Cast<DynamicKeywordStatementAst>())
+            for (int index = 0; index < resourceInstancesInNode.Count; index++)
             {
+                if (resourceInstancesInNode[index] is not DynamicKeywordStatementAst resource)
+                {
+                    index += SkipUnresolvedResource(resourceInstancesInNode, index);
+                    continue;
+                }
+
                 DscResourceInstance currentResourceInfo = new();
                 Dictionary<string, object?> currentResourceProperties = [];
 
@@ -345,29 +495,17 @@ namespace DSCParser.CSharp
                 currentResourceInfo.ResourceName = resourceType;
                 currentResourceInfo.ResourceInstanceName = resourceInstanceName;
 
-                // Get reference to the current resource
-                DscResourceInfo currentResource = _dscResources[resourceType];
-
-                // Create property lookup hashtable for this resource type if not already cached
-                if (!_resourcePropertyCache.ContainsKey(resourceType))
+                if (!_dscResources.ContainsKey(resourceType))
                 {
-                    Dictionary<string, DscResourcePropertyInfo> propertyLookup = new(StringComparer.CurrentCultureIgnoreCase);
-                    foreach (DscResourcePropertyInfo property in currentResource.PropertiesAsResourceInfo)
-                    {
-                        propertyLookup[property.Name] = property;
-                    }
-                    _resourcePropertyCache[resourceType] = propertyLookup;
+                    ReportWarning(
+                        $"Resource '{resourceType}' (instance '{resourceInstanceName}') was not found among the loaded DSC resources and was omitted from the converted configuration.");
+                    continue;
                 }
-                Dictionary<string, DscResourcePropertyInfo>? resourcePropertyLookup = _resourcePropertyCache[resourceType];
 
                 foreach (Tuple<ExpressionAst, StatementAst> keyValuePair in ((HashtableAst)resource.CommandElements[2]).KeyValuePairs)
                 {
                     string key = keyValuePair.Item1.ToString();
                     object? value = null;
-
-                    // Retrieve the current property's type based on the resource's schema.
-                    DscResourcePropertyInfo currentPropertyInResourceSchema = resourcePropertyLookup[key];
-                    string valueType = currentPropertyInResourceSchema.PropertyType;
 
                     // Process every kind of property except single CIM instance assignments like:
                     // PsDscRunAsCredential = MSFT_Credential{
@@ -376,11 +514,11 @@ namespace DSCParser.CSharp
                     // };
                     if (keyValuePair.Item2 is PipelineAst pip)
                     {
-                        value = ProcessPipelineAst(pip, resourceType, options?.IncludeCIMInstanceInfo ?? true);
+                        value = ProcessPipelineAst(pip, options?.IncludeCIMInstanceInfo ?? true);
                     }
                     else if (keyValuePair.Item2 is DynamicKeywordStatementAst dynamicStatement)
                     {
-                        value = ProcessDynamicKeywordStatementAst(dynamicStatement, resourceType, options?.IncludeCIMInstanceInfo ?? true);
+                        value = ProcessDynamicKeywordStatementAst(dynamicStatement, options?.IncludeCIMInstanceInfo ?? true);
                     }
                     currentResourceProperties.Add(key, value!);
                 }
@@ -392,22 +530,58 @@ namespace DSCParser.CSharp
             return result;
         }
 
-        private static object? ProcessPipelineAst(PipelineAst pip, string resourceName, bool includeCimInstanceInfo)
+        /// <summary>
+        /// Reports a resource the installed modules no longer define and returns how many additional
+        /// statements it spans. Such a resource is not a DSC keyword, so PowerShell parses it as a plain
+        /// command: "Name Instance" followed by a detached body, or "Name Instance { ... }" on one line.
+        /// </summary>
+        private static int SkipUnresolvedResource(ReadOnlyCollection<StatementAst> statements, int index)
+        {
+            if (statements[index] is not PipelineAst pipeline ||
+                pipeline.PipelineElements.Count == 0 ||
+                pipeline.PipelineElements[0] is not CommandAst command ||
+                command.CommandElements.Count is not (2 or 3) ||
+                command.CommandElements[0] is not StringConstantExpressionAst resourceName)
+            {
+                ReportWarning($"Skipped an unrecognized statement in the DSC configuration: {statements[index].Extent.Text}");
+                return 0;
+            }
+
+            string instanceName = command.CommandElements[1] is StringConstantExpressionAst instance
+                ? instance.Value
+                : command.CommandElements[1].Extent.Text;
+
+            ReportWarning(
+                $"Resource '{resourceName.Value}' (instance '{instanceName}') could not be resolved against the imported module(s) " +
+                "and was omitted from the converted configuration. It was likely removed in the installed module version.");
+
+            return command.CommandElements.Count == 2 && IsDetachedResourceBody(statements, index + 1) ? 1 : 0;
+        }
+
+        private static bool IsDetachedResourceBody(ReadOnlyCollection<StatementAst> statements, int index)
+        {
+            return index < statements.Count &&
+                   statements[index] is PipelineAst pipeline &&
+                   pipeline.PipelineElements.Count == 1 &&
+                   pipeline.PipelineElements[0] is CommandExpressionAst { Expression: ScriptBlockExpressionAst };
+        }
+
+        private static object? ProcessPipelineAst(PipelineAst pip, bool includeCimInstanceInfo)
         {
             // CommandExpressionAst is for Strings, Integers, Arrays, Variables, the "basic" types in a PowerShell DSC configuration
             if (pip.PipelineElements[0] is not CommandExpressionAst expr)
             {
                 // CommandAst is for "complex" objects like CIMInstances, e.g. PsDscRunAsCredential or commands like New-Object System.Management.Automation.PSCredential('Password', (ConvertTo-SecureString ((New-Guid).ToString()) -AsPlainText -Force));
                 CommandAst ast = pip.PipelineElements[0] as CommandAst ?? throw new InvalidOperationException("Unexpected AST structure in DSC configuration parsing.");
-                return ProcessCommandAst(ast, resourceName, includeCimInstanceInfo).Item2;
+                return ProcessCommandAst(ast, includeCimInstanceInfo).Item2;
             }
 
             return expr.Expression is not null
-                ? ProcessCommandExpressionAst(expr, resourceName, includeCimInstanceInfo)
+                ? ProcessExpressionAst(expr.Expression, includeCimInstanceInfo)
                 : pip.Parent.ToString();
         }
 
-        private static (string, object?) ProcessCommandAst(CommandAst commandAst, string resourceName, bool includeCimInstanceInfo)
+        private static (string, object?) ProcessCommandAst(CommandAst commandAst, bool includeCimInstanceInfo)
         {
             Dictionary<string, object?> result = [];
             ReadOnlyCollection<CommandElementAst>? elements = commandAst.CommandElements;
@@ -445,7 +619,7 @@ namespace DSCParser.CSharp
                             ?? throw new InvalidOperationException("Failed to parse property statement in CIM instance scriptblock.");
 
                         // Evaluate each property assignment
-                        (string, object?) res = ProcessCommandAst(propertyStatement, resourceName, includeCimInstanceInfo);
+                        (string, object?) res = ProcessCommandAst(propertyStatement, includeCimInstanceInfo);
                         result.Add(res.Item1, res.Item2);
                     }
 
@@ -472,7 +646,7 @@ namespace DSCParser.CSharp
                 if (assignmentOperator.Value.Equals("="))
                 {
                     StringConstantExpressionAst key = (StringConstantExpressionAst)elements[0];
-                    return (key.Value, ProcessExpressionAst((ExpressionAst)elements[2], resourceName, includeCimInstanceInfo));
+                    return (key.Value, ProcessExpressionAst((ExpressionAst)elements[2], includeCimInstanceInfo));
                 }
 
                 return ("", commandAst.ToString());
@@ -481,7 +655,7 @@ namespace DSCParser.CSharp
             return ("", commandAst.ToString());
         }
 
-        private static object ProcessExpressionAst(ExpressionAst expr, string resourceName, bool includeCimInstanceInfo)
+        private static object ProcessExpressionAst(ExpressionAst expr, bool includeCimInstanceInfo)
         {
             return expr switch
             {
@@ -492,21 +666,16 @@ namespace DSCParser.CSharp
                 // A member of an object like $obj.Property. Used for configuration data, e.g. $ConfigurationData.NonNodeData.ApplicationId
                 MemberExpressionAst member => ProcessMemberExpressionAst(member),
                 // An array like @("value1", "value2")
-                ArrayExpressionAst array => ProcessArrayExpressionAst(array, resourceName, includeCimInstanceInfo),
+                ArrayExpressionAst array => ProcessArrayExpressionAst(array, includeCimInstanceInfo),
                 // An expandable string like "https://$OrganizationName/"
                 ExpandableStringExpressionAst expString => expString.Value,
                 // A hashtable like @{key=value; key2=value2}
-                HashtableAst hashtable => ProcessHashtableExpressionAst(hashtable),
+                HashtableAst hashtable => ProcessHashtableExpressionAst(hashtable, includeCimInstanceInfo),
                 _ => expr.ToString()
             };
         }
 
-        private static object ProcessCommandExpressionAst(CommandExpressionAst expr, string resourceName, bool includeCimInstanceInfo)
-        {
-            return ProcessExpressionAst(expr.Expression, resourceName, includeCimInstanceInfo);
-        }
-
-        private static List<object> ProcessArrayExpressionAst(ArrayExpressionAst arrayAst, string resourceName, bool includeCimInstanceInfo)
+        private static List<object> ProcessArrayExpressionAst(ArrayExpressionAst arrayAst, bool includeCimInstanceInfo)
         {
             StatementBlockAst arrayDefinition = arrayAst.SubExpression;
 
@@ -538,8 +707,8 @@ namespace DSCParser.CSharp
                         //         }
                         //     }
                         // );
-                        (string, object?) complexArrayItemTuple = ProcessCommandAst((CommandAst)pipelineArrayValue.PipelineElements[0], resourceName, includeCimInstanceInfo);
-                        returnList.Add(complexArrayItemTuple.Item2);
+                        (string, object?) complexArrayItemTuple = ProcessCommandAst((CommandAst)pipelineArrayValue.PipelineElements[0], includeCimInstanceInfo);
+                        returnList.Add(complexArrayItemTuple.Item2!);
                         continue;
                     }
                     switch (arrayElementDefinition.Expression)
@@ -548,14 +717,14 @@ namespace DSCParser.CSharp
                         // variables like @($var1, $var2), expandable strings like @("https://$OrganizationName/", "https://$TenantGuid/")
                         // or more types of elements
                         case ArrayLiteralAst arrayLiteral:
+                            foreach (ExpressionAst element in arrayLiteral.Elements)
                             {
-                                return arrayLiteral.Elements
-                                    .Select(element => ProcessExpressionAst(element, resourceName, includeCimInstanceInfo))
-                                    .ToList();
+                                returnList.Add(ProcessExpressionAst(element, includeCimInstanceInfo));
                             }
+                            break;
                         // Any other type of expression inside the array
                         case ExpressionAst expression:
-                            returnList.Add(ProcessExpressionAst(expression, resourceName, includeCimInstanceInfo));
+                            returnList.Add(ProcessExpressionAst(expression, includeCimInstanceInfo));
                             break;
                         default:
                             break;
@@ -566,16 +735,22 @@ namespace DSCParser.CSharp
 
             // Arrays containing CIM instances are represented as DynamicKeywordStatementAst
             List<object> arrayCimInstances = [];
-            foreach (DynamicKeywordStatementAst arrayCimInstance in arrayDefinition.Statements.Cast<DynamicKeywordStatementAst>())
+            foreach (StatementAst statement in arrayDefinition.Statements)
             {
-                arrayCimInstances.Add(ProcessDynamicKeywordStatementAst(arrayCimInstance, resourceName, includeCimInstanceInfo));
+                if (statement is DynamicKeywordStatementAst arrayCimInstance)
+                {
+                    arrayCimInstances.Add(ProcessDynamicKeywordStatementAst(arrayCimInstance, includeCimInstanceInfo));
+                }
+                else
+                {
+                    ReportWarning($"Skipped an unrecognized array element in the DSC configuration: {statement.Extent.Text}");
+                }
             }
             return arrayCimInstances;
         }
 
         private static Dictionary<string, object?> ProcessDynamicKeywordStatementAst(
             DynamicKeywordStatementAst commandAst,
-            string resourceName,
             bool includeCimInstanceInfo)
         {
             ReadOnlyCollection<CommandElementAst>? elements = commandAst.CommandElements;
@@ -587,9 +762,6 @@ namespace DSCParser.CSharp
                 elements[2] is HashtableAst hashtableAst)
             {
                 string cimInstanceName = cimInstanceNameAst.Value;
-
-                // Get CIM class properties
-                // CimClass cimClass = GetCimClass(cimInstanceName, resourceName);
 
                 if (includeCimInstanceInfo)
                 {
@@ -603,11 +775,11 @@ namespace DSCParser.CSharp
                     object? value = null;
                     if (kvp.Item2 is PipelineAst pip)
                     {
-                        value = ProcessPipelineAst(pip, resourceName, includeCimInstanceInfo);
+                        value = ProcessPipelineAst(pip, includeCimInstanceInfo);
                     }
                     else if (kvp.Item2 is DynamicKeywordStatementAst dynamicStatement)
                     {
-                        value = ProcessDynamicKeywordStatementAst(dynamicStatement, resourceName, includeCimInstanceInfo);
+                        value = ProcessDynamicKeywordStatementAst(dynamicStatement, includeCimInstanceInfo);
                     }
                     currentResult[key] = value;
                 }
@@ -618,20 +790,18 @@ namespace DSCParser.CSharp
 
         private static object ProcessVariableExpressionAst(VariableExpressionAst variableAst)
         {
-            if (variableAst.ToString().Equals("$true", StringComparison.InvariantCultureIgnoreCase) ||
-                variableAst.ToString().Equals("$false", StringComparison.InvariantCultureIgnoreCase))
-            {
-                return bool.Parse(variableAst.ToString().TrimStart('$'));
-            }
+            string text = variableAst.ToString();
 
-            return variableAst.ToString();
+            return text.Equals("$true", StringComparison.OrdinalIgnoreCase) || text.Equals("$false", StringComparison.OrdinalIgnoreCase)
+                ? bool.Parse(text.TrimStart('$'))
+                : text;
         }
 
         private static object ProcessConstantExpressionAst(ConstantExpressionAst constantAst) => constantAst.Value;
 
         private static string ProcessMemberExpressionAst(MemberExpressionAst memberAst) => memberAst.ToString();
 
-        private static Hashtable ProcessHashtableExpressionAst(HashtableAst hashtableAst)
+        private static Hashtable ProcessHashtableExpressionAst(HashtableAst hashtableAst, bool includeCimInstanceInfo)
         {
             Hashtable result = [];
             foreach (Tuple<ExpressionAst, StatementAst> kvp in hashtableAst.KeyValuePairs)
@@ -640,11 +810,11 @@ namespace DSCParser.CSharp
                 object? value = null;
                 if (kvp.Item2 is PipelineAst pip)
                 {
-                    value = ProcessPipelineAst(pip, "", true);
+                    value = ProcessPipelineAst(pip, includeCimInstanceInfo);
                 }
                 else if (kvp.Item2 is DynamicKeywordStatementAst dynamicStatement)
                 {
-                    value = ProcessDynamicKeywordStatementAst(dynamicStatement, "", true);
+                    value = ProcessDynamicKeywordStatementAst(dynamicStatement, includeCimInstanceInfo);
                 }
                 result[key] = value;
             }
@@ -667,41 +837,48 @@ namespace DSCParser.CSharp
             // Process comments after Node
             for (int i = tokenPositionOfNode; i < tokens.Length; i++)
             {
-                if (tokens[i].Kind is TokenKind.Comment)
+                if (tokens[i].Kind is not TokenKind.Comment)
                 {
-                    int stepback = 1;
-                    while (tokens[i - stepback].Kind is not TokenKind.DynamicKeyword)
+                    continue;
+                }
+
+                int keywordIndex = i - 1;
+                while (keywordIndex >= 0 && tokens[keywordIndex].Kind is not TokenKind.DynamicKeyword)
+                {
+                    keywordIndex--;
+                }
+
+                // A comment with no enclosing resource declaration has nothing to attach to
+                if (keywordIndex < 0 || keywordIndex + 1 >= tokens.Length ||
+                    tokens[keywordIndex + 1] is not StringExpandableToken resourceInstanceName)
+                {
+                    continue;
+                }
+
+                string commentResourceType = tokens[keywordIndex].Text;
+                string commentResourceInstanceName = resourceInstanceName.Value;
+
+                // Backtrack to find associated property
+                int propertyIndex = i;
+                while (propertyIndex >= 0 && tokens[propertyIndex].Kind is not TokenKind.Identifier and not TokenKind.NewLine)
+                {
+                    propertyIndex--;
+                }
+
+                if (propertyIndex < 0 || tokens[propertyIndex].Kind is not TokenKind.Identifier)
+                {
+                    continue;
+                }
+
+                string commentAssociatedProperty = tokens[propertyIndex].Text;
+
+                foreach (DscResourceInstance parsedObject in parsedObjects)
+                {
+                    if (parsedObject.ResourceName.Equals(commentResourceType, StringComparison.OrdinalIgnoreCase) &&
+                        parsedObject.ResourceInstanceName.Equals(commentResourceInstanceName, StringComparison.Ordinal) &&
+                        parsedObject.Properties.ContainsKey(commentAssociatedProperty))
                     {
-                        stepback++;
-                    }
-
-                    string commentResourceType = tokens[i - stepback].Text;
-                    StringExpandableToken resourceInstanceName = tokens[i - stepback + 1] as StringExpandableToken
-                        ?? throw new InvalidOperationException($"Failed to find corresponding resource for comment {tokens[i].Text}");
-                    string commentResourceInstanceName = resourceInstanceName.Value;
-
-                    // Backtrack to find associated property
-                    stepback = 0;
-                    while (tokens[i - stepback].Kind is not TokenKind.Identifier and not TokenKind.NewLine)
-                    {
-                        stepback++;
-                    }
-
-                    if (tokens[i - stepback].Kind is TokenKind.Identifier)
-                    {
-                        string commentAssociatedProperty = tokens[i - stepback].Text;
-
-                        // Loop through all instances in the ParsedObject to retrieve
-                        // the one associated with the comment
-                        for (int j = 0; j < parsedObjects.Count; j++)
-                        {
-                            if (parsedObjects[j].ResourceName.Equals(commentResourceType) &&
-                                parsedObjects[j].ResourceInstanceName.Equals(commentResourceInstanceName) &&
-                                parsedObjects[j].Properties.ContainsKey(commentAssociatedProperty))
-                            {
-                                parsedObjects[j].AddProperty($"_metadata_{commentAssociatedProperty}", tokens[i].Text);
-                            }
-                        }
+                        parsedObject.AddProperty($"_metadata_{commentAssociatedProperty}", tokens[i].Text);
                     }
                 }
             }
@@ -709,124 +886,182 @@ namespace DSCParser.CSharp
             return parsedObjects;
         }
 
-        private static string FormatProperty(string property, object? value, string additionalSpaces, string childSpacer)
+        private static void AppendProperty(StringBuilder result, string property, object? value, string additionalSpaces, string childSpacer, int childLevel)
         {
-            StringBuilder result = new();
-
             switch (value)
             {
                 case string strValue:
-                    // If the string starts with a $ and does not contain any spaces, we treat it as a variable and do not wrap it in quotes
-                    if (strValue.StartsWith("$") && !strValue.StartsWith("$($") && !strValue.Contains(' '))
+                    AppendPropertyPrefix(result, property, additionalSpaces, childSpacer);
+                    // A string starting with $ and containing no spaces is a variable reference, not a literal
+                    if (strValue.StartsWith("$", StringComparison.Ordinal) && !strValue.StartsWith("$($", StringComparison.Ordinal) && !strValue.Contains(' '))
                     {
-                        _ = result.AppendLine($"{childSpacer}    {property}{additionalSpaces}= {strValue}");
+                        _ = result.AppendLine(strValue);
                     }
-                    else if (strValue.StartsWith("New-Object"))
+                    else if (strValue.StartsWith("New-Object", StringComparison.Ordinal))
                     {
-                        _ = result.AppendLine($"{childSpacer}    {property}{additionalSpaces}= {strValue.TrimStart('"').TrimEnd('"')}");
+                        _ = result.AppendLine(strValue.TrimStart('"').TrimEnd('"'));
                     }
                     else
                     {
-                        string escaped = strValue.Replace("`", "``").Replace("\"", "`\"");
-                        _ = result.AppendLine($"{childSpacer}    {property}{additionalSpaces}= \"{escaped}\"");
+                        _ = AppendQuoted(result, strValue).AppendLine();
                     }
                     break;
 
                 case int intValue:
-                    _ = result.AppendLine($"{childSpacer}    {property}{additionalSpaces}= {intValue}");
+                    AppendPropertyPrefix(result, property, additionalSpaces, childSpacer);
+                    _ = result.Append(intValue).AppendLine();
                     break;
 
                 case bool boolValue:
-                    _ = result.AppendLine($"{childSpacer}    {property}{additionalSpaces}= ${boolValue}");
+                    AppendPropertyPrefix(result, property, additionalSpaces, childSpacer);
+                    _ = result.Append('$').Append(boolValue).AppendLine();
                     break;
 
-                case Array arrayValue:
-                    _ = result.Append($"{childSpacer}    {property}{additionalSpaces}= @(");
-                    // If no elements are provided, close the array immediately
-                    if (arrayValue.Length == 0)
-                    {
-                        _ = result.AppendLine(")");
-                        break;
-                    }
-
-                    List<string> arrayItemsAsString = [];
-                    bool isSimpleArray = true;
-                    foreach (object item in arrayValue)
-                    {
-                        if (item is string or int or bool)
-                        {
-                            arrayItemsAsString.Add(item is string s ? $"\"{s.Replace("`", "``").Replace("\"", "`\"")}\"" : item.ToString());
-                        }
-                        else if (item is Hashtable ht)
-                        {
-                            string converted = ConvertFromDscObject([ht], (childSpacer.Length / 4) + 2);
-                            arrayItemsAsString.Add(converted.TrimEnd());
-                            isSimpleArray = false;
-                        }
-                        else
-                        {
-                            arrayItemsAsString.Add($"{new string(' ', childSpacer.Length + 8)}{item.ToString() ?? string.Empty}");
-                        }
-                    }
-
-                    if (isSimpleArray && arrayItemsAsString.Count == 1)
-                    {
-                        _ = result.Append(arrayItemsAsString[0]);
-                        _ = result.AppendLine(")");
-                    }
-                    else
-                    {
-                        _ = result.AppendLine();
-                        _ = result.AppendLine(string.Join(Environment.NewLine, arrayItemsAsString.Select(line =>
-                        {
-                            if (!line.StartsWith(new string(' ', childSpacer.Length + 8)))
-                            {
-                                return $"{new string(' ', childSpacer.Length + 8)}{line.TrimStart()}";
-                            }
-                            return line;
-                        })));
-                        _ = result.AppendLine($"{childSpacer}    )");
-                    }
+                // Covers Hashtable and the Dictionary instances the parser produces for CIM instances
+                case IDictionary dictionary:
+                    AppendPropertyPrefix(result, property, additionalSpaces, childSpacer);
+                    int contentStart = result.Length;
+                    AppendDscObjects(result, [AsHashtable(dictionary)], childLevel + 1);
+                    StripIndentOfOpeningLine(result, contentStart);
                     break;
 
-                case Hashtable hashtable:
-                    _ = result.Append($"{childSpacer}    {property}{additionalSpaces}= ");
-                    if (hashtable.ContainsKey("CIMInstance") || hashtable.ContainsKey("ResourceInstanceName"))
-                    {
-                        ConvertFromDscObject([hashtable], (childSpacer.Length / 4) + 1)
-                            .Split([Environment.NewLine], StringSplitOptions.None)
-                            .Where(line => !string.IsNullOrWhiteSpace(line))
-                            .ToList()
-                            .ForEach(line =>
-                            {
-                                // Trim the first spaces to align properly for only the first declaration
-                                string regex = $"^\\s{{{childSpacer.Length}}}\\s{{4}}\\w*{{";
-                                if (Regex.IsMatch(line, regex))
-                                    line = line.Replace(childSpacer + "    ", "");
-                                _ = result.AppendLine(line);
-                            });
-                    }
-                    else
-                    {
-                        _ = result.Append("@");
-                        List<string> lines = ConvertFromDscObject([hashtable], childSpacer.Length / 4 + 1)
-                            .Split([Environment.NewLine], StringSplitOptions.None)
-                            .Where(line => !string.IsNullOrWhiteSpace(line))
-                            .ToList();
-                        lines[0] = lines[0].TrimStart();
-                        lines.ForEach(line => _ = result.AppendLine(line));
-                    }
+                case IEnumerable sequence:
+                    AppendPropertyPrefix(result, property, additionalSpaces, childSpacer);
+                    AppendArray(result, sequence, childSpacer, childLevel);
                     break;
 
                 default:
                     if (value != null)
                     {
-                        _ = result.AppendLine($"{childSpacer}    {property}{additionalSpaces}= {value}");
+                        AppendPropertyPrefix(result, property, additionalSpaces, childSpacer);
+                        _ = result.Append(value).AppendLine();
                     }
                     break;
             }
+        }
 
-            return result.ToString();
+        private static void AppendPropertyPrefix(StringBuilder result, string property, string additionalSpaces, string childSpacer)
+        {
+            _ = result.Append(childSpacer).Append("    ").Append(property).Append(additionalSpaces).Append("= ");
+        }
+
+        private static StringBuilder AppendQuoted(StringBuilder result, string value)
+        {
+            _ = result.Append('"');
+            foreach (char character in value)
+            {
+                if (character is '`' or '"')
+                {
+                    _ = result.Append('`');
+                }
+                _ = result.Append(character);
+            }
+            return result.Append('"');
+        }
+
+        private static void AppendArray(StringBuilder result, IEnumerable sequence, string childSpacer, int childLevel)
+        {
+            _ = result.Append("@(");
+
+            List<object?> items = [];
+            bool isSimpleArray = true;
+            foreach (object? item in sequence)
+            {
+                items.Add(item);
+                if (item is IDictionary)
+                {
+                    isSimpleArray = false;
+                }
+            }
+
+            if (items.Count == 0)
+            {
+                _ = result.AppendLine(")");
+                return;
+            }
+
+            if (isSimpleArray && items.Count == 1)
+            {
+                AppendArrayItem(result, items[0]);
+                _ = result.AppendLine(")");
+                return;
+            }
+
+            string itemIndent = new(' ', childSpacer.Length + 8);
+
+            _ = result.AppendLine();
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (i > 0)
+                {
+                    _ = result.Append(Environment.NewLine);
+                }
+
+                if (items[i] is IDictionary nested)
+                {
+                    AppendDscObjects(result, [AsHashtable(nested)], childLevel + 2);
+                    result.Length -= Environment.NewLine.Length;
+                }
+                else
+                {
+                    _ = result.Append(itemIndent);
+                    AppendArrayItem(result, items[i]);
+                }
+            }
+            _ = result.AppendLine();
+
+            _ = result.Append(childSpacer).AppendLine("    )");
+        }
+
+        private static Hashtable AsHashtable(IDictionary dictionary)
+        {
+            if (dictionary is Hashtable hashtable)
+            {
+                return hashtable;
+            }
+
+            Hashtable converted = new(dictionary.Count);
+            foreach (DictionaryEntry entry in dictionary)
+            {
+                converted[entry.Key] = entry.Value;
+            }
+            return converted;
+        }
+
+        private static void AppendArrayItem(StringBuilder result, object? item)
+        {
+            if (item is string text)
+            {
+                _ = AppendQuoted(result, text);
+            }
+            else
+            {
+                _ = result.Append(item);
+            }
+        }
+
+        /// <summary>
+        /// Removes the leading indentation of the first rendered line when that line opens a block, so
+        /// the nested object starts directly after the "= " of its property assignment.
+        /// </summary>
+        private static void StripIndentOfOpeningLine(StringBuilder result, int contentStart)
+        {
+            int lineEnd = contentStart;
+            while (lineEnd < result.Length && result[lineEnd] is not '\r' and not '\n')
+            {
+                lineEnd++;
+            }
+
+            int indent = contentStart;
+            while (indent < lineEnd && result[indent] == ' ')
+            {
+                indent++;
+            }
+
+            if (indent > contentStart && lineEnd > contentStart && result[lineEnd - 1] == '{')
+            {
+                _ = result.Remove(contentStart, indent - contentStart);
+            }
         }
     }
 }

@@ -59,3 +59,81 @@ jobs:
               throw "No functions exported from the DSCParser module."
           }
           Write-Host "Exported functions: $($exportedFunctions -join ', ')"
+
+      - name: Validate Class-Based Resource Discovery And Parsing
+        shell: pwsh
+        run: |
+          Import-Module ./DSCParser/DSCParser.psd1 -Force -ErrorAction Stop
+
+          $classBasedModule = Get-Module -ListAvailable |
+              Where-Object { $_.ExportedDscResources.Count -gt 0 } |
+              Select-Object -First 1
+
+          if ($null -eq $classBasedModule)
+          {
+              Write-Host "::warning::No class-based DSC resource module installed; skipping class-based validation."
+              exit 0
+          }
+
+          $resources = @(Get-DscResourceV2 -Module $classBasedModule.Name -ErrorAction Stop)
+          if ($resources.Count -eq 0)
+          {
+              throw "No resources discovered for module '$($classBasedModule.Name)'."
+          }
+
+          # Only the names the manifest exports are class-based resources. Discovery also returns the
+          # embedded CIM types a class-based resource references, which are not resources themselves,
+          # so assert against the exported set rather than everything that came back.
+          $exported = [System.Collections.Generic.HashSet[System.String]]::new(
+              [System.String[]]$classBasedModule.ExportedDscResources,
+              [System.StringComparer]::OrdinalIgnoreCase)
+
+          $classBased = @($resources | Where-Object { $exported.Contains($_.Name) })
+
+          $notClassBased = @($classBased | Where-Object { $_.ImplementationDetail -ne 'ClassBased' })
+          if ($notClassBased.Count -gt 0)
+          {
+              throw "Expected every exported resource to be ClassBased, but $($notClassBased.Count) were not: $(($notClassBased.Name | Select-Object -First 10) -join ', ')"
+          }
+
+          $notDiscovered = @($classBasedModule.ExportedDscResources | Where-Object { $_ -notin $classBased.Name })
+          if ($notDiscovered.Count -gt 0)
+          {
+              throw "$($notDiscovered.Count) exported resources were not discovered: $(($notDiscovered | Select-Object -First 10) -join ', ')"
+          }
+
+          # Anything reported as ClassBased must be an exported resource, never an embedded CIM type.
+          $misclassified = @($resources | Where-Object { $_.ImplementationDetail -eq 'ClassBased' -and -not $exported.Contains($_.Name) })
+          if ($misclassified.Count -gt 0)
+          {
+              throw "$($misclassified.Count) resources are ClassBased but not exported by the module: $(($misclassified.Name | Select-Object -First 10) -join ', ')"
+          }
+
+          Write-Host "Validated $($classBased.Count) exported class-based resources ($($resources.Count) discovered in total, $($resources.Count - $classBased.Count) embedded CIM types)."
+
+          $resource = $classBased | Where-Object { $_.Properties.Count -gt 0 } | Select-Object -First 1
+          if ($null -eq $resource)
+          {
+              throw "No class-based resource with properties found in module '$($classBasedModule.Name)'."
+          }
+          $config = @"
+          Configuration Test
+          {
+              Import-DscResource -ModuleName $($classBasedModule.Name) -ModuleVersion $($classBasedModule.Version)
+              Node localhost
+              {
+                  $($resource.Name) TestInstance
+                  {
+                      $($resource.Properties[0].Name) = "TestValue"
+                  }
+              }
+          }
+          "@
+
+          $parsed = @(ConvertTo-DSCObject -Content $config -ErrorAction Stop)
+          if ($parsed.Count -ne 1 -or $parsed[0].ResourceName -ne $resource.Name)
+          {
+              throw "Failed to parse a class-based configuration for '$($resource.Name)'."
+          }
+
+          Write-Host "Class-based discovery and parsing validated against $($classBasedModule.Name) ($($classBased.Count) class-based resources)."

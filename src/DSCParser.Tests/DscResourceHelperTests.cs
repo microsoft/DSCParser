@@ -109,11 +109,24 @@ public class DscResourceHelperTests
     [Fact]
     public void IsPatternMatched_WithQuestionMarkWildcard_ShouldMatchSingleChar()
     {
-        string[] patterns = ["Resource.?$"];
+        string[] patterns = ["Resource?"];
 
         Assert.True(DscResourceHelpers.IsPatternMatched(patterns, "Resource1"));
         Assert.True(DscResourceHelpers.IsPatternMatched(patterns, "ResourceA"));
         Assert.False(DscResourceHelpers.IsPatternMatched(patterns, "Resource12"));
+    }
+
+    [Fact]
+    public void IsPatternMatched_ShouldMatchWholeNameNotSubstring()
+    {
+        Assert.False(DscResourceHelpers.IsPatternMatched(["Website"], "MSFT_xWebsite"));
+        Assert.True(DscResourceHelpers.IsPatternMatched(["*Website"], "MSFT_xWebsite"));
+    }
+
+    [Fact]
+    public void IsPatternMatched_WithRegexMetacharacters_ShouldTreatThemLiterally()
+    {
+        Assert.False(DscResourceHelpers.IsPatternMatched(["MSFT_.Website"], "MSFT_xWebsite"));
     }
 
     #endregion
@@ -200,7 +213,7 @@ public class DscResourceHelperTests
     [Fact]
     public void ConvertTypeConstraintToTypeName_MsftCredential_ShouldReturnPSCredential()
     {
-        var result = DscResourceHelpers.ConvertTypeConstraintToTypeName("MSFT_Credential", []);
+        var result = DscResourceHelpers.ConvertTypeConstraintToTypeName("MSFT_Credential");
 
         Assert.Equal("[PSCredential]", result);
     }
@@ -208,7 +221,7 @@ public class DscResourceHelperTests
     [Fact]
     public void ConvertTypeConstraintToTypeName_MsftKeyValuePair_ShouldReturnHashTable()
     {
-        var result = DscResourceHelpers.ConvertTypeConstraintToTypeName("MSFT_KeyValuePair", []);
+        var result = DscResourceHelpers.ConvertTypeConstraintToTypeName("MSFT_KeyValuePair");
 
         Assert.Equal("[HashTable]", result);
     }
@@ -216,7 +229,7 @@ public class DscResourceHelperTests
     [Fact]
     public void ConvertTypeConstraintToTypeName_MsftKeyValuePairArray_ShouldReturnHashTable()
     {
-        var result = DscResourceHelpers.ConvertTypeConstraintToTypeName("MSFT_KeyValuePair[]", []);
+        var result = DscResourceHelpers.ConvertTypeConstraintToTypeName("MSFT_KeyValuePair[]");
 
         Assert.Equal("[HashTable]", result);
     }
@@ -224,9 +237,7 @@ public class DscResourceHelperTests
     [Fact]
     public void ConvertTypeConstraintToTypeName_DscResourceName_ShouldReturnBracketed()
     {
-        var dscResourceNames = new[] { "MSFT_TestResource" };
-
-        var result = DscResourceHelpers.ConvertTypeConstraintToTypeName("MSFT_TestResource", dscResourceNames);
+        var result = DscResourceHelpers.ConvertTypeConstraintToTypeName("MSFT_TestResource");
 
         Assert.Equal("[MSFT_TestResource]", result);
     }
@@ -234,9 +245,7 @@ public class DscResourceHelperTests
     [Fact]
     public void ConvertTypeConstraintToTypeName_DscResourceNameArray_ShouldReturnBracketed()
     {
-        var dscResourceNames = new[] { "MSFT_TestResource" };
-
-        var result = DscResourceHelpers.ConvertTypeConstraintToTypeName("MSFT_TestResource[]", dscResourceNames);
+        var result = DscResourceHelpers.ConvertTypeConstraintToTypeName("MSFT_TestResource[]");
 
         Assert.Equal("[MSFT_TestResource[]]", result);
     }
@@ -244,7 +253,7 @@ public class DscResourceHelperTests
     [Fact]
     public void ConvertTypeConstraintToTypeName_UnknownType_ShouldReturnBracketed()
     {
-        var result = DscResourceHelpers.ConvertTypeConstraintToTypeName("SomeCustomType", []);
+        var result = DscResourceHelpers.ConvertTypeConstraintToTypeName("SomeCustomType");
 
         Assert.Equal("[SomeCustomType]", result);
     }

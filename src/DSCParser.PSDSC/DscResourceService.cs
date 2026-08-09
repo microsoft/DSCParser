@@ -1,12 +1,9 @@
-﻿using Microsoft.Management.Infrastructure;
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Management.Automation;
 using System.Management.Automation.Language;
-using System.Reflection;
 using DscResourceInfo = Microsoft.PowerShell.DesiredStateConfiguration.DscResourceInfo;
 
 namespace DSCParser.PSDSC
@@ -18,13 +15,21 @@ namespace DSCParser.PSDSC
     public static class DscResourceService
     {
         // Parameters to ignore for composite resources
-        private static readonly string[] IgnoreResourceParameters =
-        [
+        private static readonly HashSet<string> IgnoreResourceParameters = new(StringComparer.OrdinalIgnoreCase)
+        {
             "InstanceName", "OutputPath", "ConfigurationData", "Verbose", "Debug",
             "ErrorAction", "WarningAction", "InformationAction", "ErrorVariable",
             "WarningVariable", "InformationVariable", "OutVariable", "OutBuffer",
             "PipelineVariable", "WhatIf", "Confirm"
-        ];
+        };
+
+        /// <summary>
+        /// Receives non-fatal diagnostics. Hosts such as the Get-DscResourceV2 cmdlet wire this to
+        /// their warning stream. When unset, diagnostics are dropped rather than written to the console.
+        /// </summary>
+        public static Action<string>? WarningSink { get; set; }
+
+        internal static void ReportWarning(string message) => WarningSink?.Invoke(message);
 
         /// <summary>
         /// Gets DSC resources on the machine with optional filtering.
@@ -43,30 +48,18 @@ namespace DSCParser.PSDSC
 
             try
             {
-                // Load default CIM keywords
-                LoadDefaultCimKeywords();
+                DscKeywordRegistry.EnsureDefaultKeywordsLoaded();
 
-                // Get module list
-                var modules = GetModuleList(moduleName);
+                var modules = GetModuleList(moduleName) ?? [];
 
-                // Import resources from modules
-                if (modules is not null && modules.Length > 0)
+                if (modules.Length > 0)
                 {
-                    ImportResourcesFromModules(modules);
+                    DscKeywordRegistry.ImportModules(modules);
                 }
 
-                // Get resources from CIM cache
-                var keywords = GetCachedKeywords(moduleName);
-                var dscResourceNames = keywords.Select(k => k.Keyword).ToArray();
-
-                // Process CIM resources
-                foreach (var keyword in keywords)
+                foreach (var keyword in GetCachedKeywords(moduleName))
                 {
-                    var resource = ResourceProcessor.GetResourceFromKeyword(
-                        keyword,
-                        resourceNames,
-                        modules ?? [],
-                        dscResourceNames);
+                    var resource = ResourceProcessor.GetResourceFromKeyword(keyword, resourceNames, modules);
 
                     if (resource is not null)
                     {
@@ -77,15 +70,13 @@ namespace DSCParser.PSDSC
                 // Get composite resources (configurations) if requested
                 if (includeCompositeResources)
                 {
-                    var configurations = GetConfigurations();
-
-                    foreach (var config in configurations)
+                    foreach (var config in GetConfigurations())
                     {
                         var resource = ResourceProcessor.GetCompositeResource(
                             resourceNames,
                             config,
                             IgnoreResourceParameters,
-                            modules ?? []);
+                            modules);
 
                         if (resource is not null &&
                             (string.IsNullOrEmpty(moduleName) ||
@@ -99,20 +90,13 @@ namespace DSCParser.PSDSC
                     }
                 }
 
-                // Sort resources by Module and Name
-                var sortedResources = resources
-                    .OrderBy(r => r.ModuleName ?? string.Empty)
-                    .ThenBy(r => r.Name)
-                    .ToList();
+                // Sort by module and name, dropping duplicates
+                var seen = new HashSet<(string, string)>();
+                var uniqueResources = new List<DscResourceInfo>(resources.Count);
 
-                // Remove duplicates
-                var uniqueResources = new List<DscResourceInfo>();
-                var seen = new HashSet<string>();
-
-                foreach (var resource in sortedResources)
+                foreach (var resource in resources.OrderBy(r => r.ModuleName ?? string.Empty).ThenBy(r => r.Name))
                 {
-                    var key = $"{resource.ModuleName}_{resource.Name}";
-                    if (seen.Add(key))
+                    if (seen.Add((resource.ModuleName ?? string.Empty, resource.Name ?? string.Empty)))
                     {
                         uniqueResources.Add(resource);
                     }
@@ -122,9 +106,7 @@ namespace DSCParser.PSDSC
             }
             finally
             {
-                // Cleanup
-                ResetDynamicKeywords();
-                ClearDscClassCache();
+                DscResourceHelpers.ClearModuleCache();
             }
         }
 
@@ -140,34 +122,6 @@ namespace DSCParser.PSDSC
 
         #region Private Helper Methods
 
-        private static void LoadDefaultCimKeywords()
-        {
-            try
-            {
-                var dscClassCacheType = Type.GetType(
-                    "Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache, " +
-                    "System.Management.Automation",
-                    throwOnError: false);
-
-                if (dscClassCacheType is not null)
-                {
-                    var method = dscClassCacheType.GetMethod(
-                        "LoadDefaultCimKeywords",
-                        [typeof(Collection<Exception>), typeof(bool)]);
-
-                    if (method is not null)
-                    {
-                        var errors = new Collection<Exception>();
-                        _ = method.Invoke(null, [errors, true]);
-                    }
-                }
-            }
-            catch
-            {
-                // Silently ignore errors
-            }
-        }
-
         private static PSModuleInfo[]? GetModuleList(string? moduleName)
         {
             try
@@ -182,163 +136,38 @@ namespace DSCParser.PSDSC
                 else
                 {
                     var dscModules = DscResourceHelpers.GetDscResourceModules();
-                    if (dscModules.Count > 0)
-                    {
-                        _ = ps.AddCommand("Get-Module")
-                          .AddParameter("ListAvailable", true)
-                          .AddParameter("Name", dscModules.ToArray());
-                    }
-                    else
+                    if (dscModules.Count == 0)
                     {
                         return null;
                     }
+
+                    _ = ps.AddCommand("Get-Module")
+                      .AddParameter("ListAvailable", true)
+                      .AddParameter("Name", dscModules.ToArray());
                 }
 
-                var results = ps.Invoke();
-                return results.Select(r => r.BaseObject as PSModuleInfo)
-                             .Where(m => m is not null)
-                             .ToArray();
+                return ps.Invoke().Select(r => r.BaseObject).OfType<PSModuleInfo>().ToArray();
             }
-            catch
+            catch (Exception ex)
             {
+                ReportWarning($"Failed to enumerate modules. Error message: {ex.Message}");
                 return null;
             }
         }
 
-        private static void ImportResourcesFromModules(PSModuleInfo[] modules)
-        {
-            foreach (var module in modules)
-            {
-                if (module.ExportedDscResources.Count > 0)
-                {
-                    ImportClassResourcesFromModule(module);
-                }
-
-                var dscResourcesPath = Path.Combine(module.ModuleBase, "DscResources");
-                if (Directory.Exists(dscResourcesPath))
-                {
-                    foreach (var resourceDir in Directory.GetDirectories(dscResourcesPath))
-                    {
-                        var resourceName = Path.GetFileName(resourceDir);
-                        ImportCimAndScriptKeywordsFromModule(module, resourceName);
-                    }
-                }
-            }
-        }
-
-        private static void ImportClassResourcesFromModule(PSModuleInfo module)
-        {
-            var dscClassCacheType = Type.GetType(
-                "Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache, " +
-                "System.Management.Automation",
-                throwOnError: false);
-
-            if (dscClassCacheType is not null)
-            {
-                var method = dscClassCacheType.GetMethod(
-                    "ImportClassResourcesFromModule",
-                    BindingFlags.Public | BindingFlags.Static);
-
-                if (method is not null)
-                {
-                    var resources = new List<string> { "*" };
-                    var functionsToDefine = new Dictionary<string, ScriptBlock>(
-                        StringComparer.OrdinalIgnoreCase);
-
-                    _ = method.Invoke(null, [module, resources, functionsToDefine]);
-                }
-            }
-        }
-
-        private static void ImportCimAndScriptKeywordsFromModule(PSModuleInfo module, string resourceName)
-        {
-            var dscClassCacheType = Type.GetType(
-                "Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache, " +
-                "System.Management.Automation",
-                throwOnError: false);
-
-            if (dscClassCacheType is not null)
-            {
-                var method = dscClassCacheType.GetMethod(
-                    "ImportCimKeywordsFromModule",
-                    [typeof(PSModuleInfo), typeof(string), typeof(string).MakeByRefType(), typeof(Dictionary<string, ScriptBlock>), typeof(Collection<Exception>)]);
-
-                if (method is not null)
-                {
-                    string? schemaFilePath = null;
-                    var functionsToDefine = new Dictionary<string, ScriptBlock>(
-                        StringComparer.OrdinalIgnoreCase);
-                    var keywordErrors = new Collection<Exception>();
-
-                    _ = method.Invoke(null, [module, resourceName, schemaFilePath, functionsToDefine, keywordErrors]);
-                }
-
-                method = dscClassCacheType.GetMethod(
-                    "ImportScriptKeywordsFromModule",
-                    [typeof(PSModuleInfo), typeof(string), typeof(string).MakeByRefType(), typeof(Dictionary<string, ScriptBlock>)]);
-
-                if (method is not null)
-                {
-                    string? schemaFilePath = null;
-                    var functionsToDefine = new Dictionary<string, ScriptBlock>(
-                        StringComparer.OrdinalIgnoreCase);
-
-                    _ = method.Invoke(null, [module, resourceName, schemaFilePath, functionsToDefine]);
-                }
-            }
-        }
-
-        internal static List<CimClass> GetCachedClassByFileName(string fileName)
-        {
-            var dscClassCacheType = Type.GetType(
-                "Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache, " +
-                "System.Management.Automation",
-                throwOnError: false);
-            if (dscClassCacheType is not null)
-            {
-                var method = dscClassCacheType.GetMethod(
-                    "GetCachedClassByFileName",
-                    BindingFlags.Public | BindingFlags.Static);
-
-                if (method is not null)
-                {
-                    var result = method.Invoke(null, [fileName]);
-                    return result as List<CimClass> ?? [];
-                }
-            }
-            return [];
-        }
-
         private static DynamicKeyword[] GetCachedKeywords(string? moduleName)
         {
-            var dscClassCacheType = Type.GetType(
-                "Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache, " +
-                "System.Management.Automation",
-                throwOnError: false);
+            var keywords = DscClassCacheReflection.GetCachedKeywords();
 
-            if (dscClassCacheType is not null)
-            {
-                var method = dscClassCacheType.GetMethod(
-                    "GetCachedKeywords",
-                    BindingFlags.Public | BindingFlags.Static);
-
-                if (method is not null)
-                {
-                    var result = method.Invoke(null, null);
-                    if (result is IEnumerable<DynamicKeyword> keywords)
-                    {
-                        return keywords.Where(k =>
-                            !k.IsReservedKeyword &&
-                            !string.IsNullOrEmpty(k.ResourceName) &&
-                            !DscResourceHelpers.IsHiddenResource(k.ResourceName) &&
-                            (string.IsNullOrEmpty(moduleName) ||
-                                k.ImplementingModule.Equals(moduleName, StringComparison.OrdinalIgnoreCase)))
-                            .ToArray();
-                    }
-                }
-            }
-
-            return [];
+            return keywords is null
+                ? []
+                : keywords.Where(k =>
+                    !k.IsReservedKeyword &&
+                    !string.IsNullOrEmpty(k.ResourceName) &&
+                    !DscResourceHelpers.IsHiddenResource(k.ResourceName) &&
+                    (string.IsNullOrEmpty(moduleName) ||
+                        k.ImplementingModule.Equals(moduleName, StringComparison.OrdinalIgnoreCase)))
+                    .ToArray();
         }
 
         private static ConfigurationInfo[] GetConfigurations()
@@ -349,49 +178,12 @@ namespace DSCParser.PSDSC
                 _ = ps.AddCommand("Get-Command")
                   .AddParameter("CommandType", "Configuration");
 
-                var results = ps.Invoke();
-                return results.Select(r => r.BaseObject as ConfigurationInfo)
-                             .Where(c => c is not null)
-                             .ToArray()!;
+                return ps.Invoke().Select(r => r.BaseObject).OfType<ConfigurationInfo>().ToArray();
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Failed to get commands by command type 'Configuration'. Error message: {ex.Message}");
+                ReportWarning($"Failed to get commands by command type 'Configuration'. Error message: {ex.Message}");
                 return [];
-            }
-        }
-
-        private static void ResetDynamicKeywords()
-        {
-            var dynamicKeywordType = typeof(DynamicKeyword);
-            var method = dynamicKeywordType.GetMethod(
-                "Reset",
-                BindingFlags.Public | BindingFlags.Static);
-
-            _ = (method?.Invoke(null, null));
-        }
-
-        private static void ClearDscClassCache()
-        {
-            try
-            {
-                var dscClassCacheType = Type.GetType(
-                    "Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache, " +
-                    "System.Management.Automation",
-                    throwOnError: false);
-
-                if (dscClassCacheType is not null)
-                {
-                    var method = dscClassCacheType.GetMethod(
-                        "ClearCache",
-                        BindingFlags.Public | BindingFlags.Static);
-
-                    _ = (method?.Invoke(null, null));
-                }
-            }
-            catch
-            {
-                // Ignore errors
             }
         }
         #endregion

@@ -177,7 +177,11 @@ if ([System.String]::IsNullOrEmpty($RepositoryRoot)) {
     $RepositoryRoot = Split-Path -Path $PSScriptRoot -Parent
 }
 
-$projects = Get-ChildItem -Path (Join-Path -Path $RepositoryRoot -ChildPath 'src') -Filter "*.csproj" -File -Recurse | Where-Object Name -NotLike "*.Tests.csproj" | ForEach-Object { $_.Name }
+# Only the netstandard2.0 shipping projects are packaged into the module. Test and benchmark
+# projects target a different framework and are built by their own tooling.
+$projects = Get-ChildItem -Path (Join-Path -Path $RepositoryRoot -ChildPath 'src') -Filter "*.csproj" -File -Recurse |
+    Where-Object { $_.Name -notlike "*.Tests.csproj" -and $_.Name -notlike "*.Benchmarks.csproj" } |
+    ForEach-Object { $_.Name }
 
 foreach ($project in $projects) {
     Build-Project -ProjectName $project.Replace(".csproj", "") -Configuration $Configuration -RepositoryRoot $RepositoryRoot -SkipClean:$SkipClean
