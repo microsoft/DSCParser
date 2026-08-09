@@ -61,11 +61,20 @@ namespace DSCParser.PSDSC
             }
         }
 
-        public static void ImportClassResourcesFromModule(PSModuleInfo module)
+        /// <summary>
+        /// Registers the class-based resources of a module as DSC keywords.
+        /// </summary>
+        /// <param name="module">The module to import from.</param>
+        /// <param name="resourcesToImport">
+        /// Names to register. A module whose file also declares the complex types its resources use
+        /// - which every class-based resource of any size does - would otherwise get a keyword per
+        /// complex type as well, because "*" matches every class in the parsed file.
+        /// </param>
+        public static void ImportClassResourcesFromModule(PSModuleInfo module, ICollection<string> resourcesToImport)
         {
             _ = ImportClassResourcesFromModuleMethod?.Invoke(
                 null,
-                [module, new List<string> { "*" }, NewFunctionTable()]);
+                [module, resourcesToImport, NewFunctionTable()]);
         }
 
         public static void ImportCimKeywordsFromModule(PSModuleInfo module, string resourceName)

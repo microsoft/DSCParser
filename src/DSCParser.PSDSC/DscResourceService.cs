@@ -163,7 +163,7 @@ namespace DSCParser.PSDSC
             {
                 if (module.ExportedDscResources.Count > 0)
                 {
-                    DscClassCacheReflection.ImportClassResourcesFromModule(module);
+                    DscClassCacheReflection.ImportClassResourcesFromModule(module, module.ExportedDscResources);
                 }
 
                 var dscResourcesPath = Path.Combine(module.ModuleBase, "DscResources");
@@ -172,6 +172,14 @@ namespace DSCParser.PSDSC
                     foreach (var resourceDir in Directory.GetDirectories(dscResourcesPath))
                     {
                         var resourceName = Path.GetFileName(resourceDir);
+
+                        // A MOF-based resource is defined by its schema file. If the schema file
+                        // does not exist (e.g. for class-based resources), skip importing keywords.
+                        if (!File.Exists(Path.Combine(resourceDir, $"{resourceName}.schema.mof")))
+                        {
+                            continue;
+                        }
+
                         DscClassCacheReflection.ImportCimKeywordsFromModule(module, resourceName);
                         DscClassCacheReflection.ImportScriptKeywordsFromModule(module, resourceName);
                     }

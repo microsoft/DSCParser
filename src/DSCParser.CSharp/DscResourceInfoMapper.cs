@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Management.Automation;
 using ImplementedAsType = Microsoft.PowerShell.DesiredStateConfiguration.ImplementedAsType;
 using DscResourceInfo = Microsoft.PowerShell.DesiredStateConfiguration.DscResourceInfo;
 using DscResourcePropertyInfo = Microsoft.PowerShell.DesiredStateConfiguration.DscResourcePropertyInfo;
@@ -14,18 +16,18 @@ namespace DSCParser.CSharp
 
             DscResourceInfo resourceInfo = new()
             {
-                ResourceType = psObject.ResourceType,
-                CompanyName = psObject.CompanyName,
-                FriendlyName = psObject.FriendlyName,
-                Module = psObject.Module,
-                Path = psObject.Path,
-                ParentPath = psObject.ParentPath,
-                ImplementedAs = Enum.Parse(typeof(ImplementedAsType), psObject.ImplementedAs.ToString()),
-                Name = psObject.Name
+                ResourceType = AsString(psObject.ResourceType),
+                CompanyName = AsString(psObject.CompanyName),
+                FriendlyName = AsString(psObject.FriendlyName),
+                Module = Unwrap(psObject.Module) as PSModuleInfo,
+                Path = AsString(psObject.Path),
+                ParentPath = AsString(psObject.ParentPath),
+                ImplementedAs = (ImplementedAsType)Enum.Parse(typeof(ImplementedAsType), AsString(psObject.ImplementedAs)),
+                Name = AsString(psObject.Name)
             };
 
             List<DscResourcePropertyInfo> props = [];
-            foreach (object obj in psObject.Properties)
+            foreach (object obj in AsEnumerable(psObject.Properties))
             {
                 props.Add(MapToDscResourcePropertyInfo(obj));
             }
@@ -38,18 +40,33 @@ namespace DSCParser.CSharp
         {
             DscResourcePropertyInfo propertyInfo = new()
             {
-                Name = psObjectPropery.Name,
-                PropertyType = psObjectPropery.PropertyType,
-                IsMandatory = psObjectPropery.IsMandatory
+                Name = AsString(psObjectPropery.Name),
+                PropertyType = AsString(psObjectPropery.PropertyType),
+                IsMandatory = LanguagePrimitives.IsTrue(Unwrap(psObjectPropery.IsMandatory))
             };
 
             List<string> newValues = [];
-            foreach (string value in psObjectPropery.Values)
+            foreach (object value in AsEnumerable(psObjectPropery.Values))
             {
-                newValues.Add(value);
+                newValues.Add(AsString(value) ?? string.Empty);
             }
             propertyInfo.Values = newValues;
             return propertyInfo;
+        }
+
+        private static object? Unwrap(object? value)
+        {
+            return value is PSObject psObject ? psObject.BaseObject : value;
+        }
+
+        private static string? AsString(object? value)
+        {
+            return Unwrap(value)?.ToString();
+        }
+
+        private static IEnumerable AsEnumerable(object? value)
+        {
+            return Unwrap(value) as IEnumerable ?? Array.Empty<object>();
         }
     }
 }

@@ -104,8 +104,17 @@ namespace DSCParser.PSDSC
                     m.Name == keyword.ImplementingModule &&
                     m.Version == keyword.ImplementingModuleVersion);
 
-                if (module is not null && module.ExportedDscResources.Contains(keyword.Keyword))
+                if (module is not null)
                 {
+                    // If a module doesn't contain the keyword we're looking for, it means that the
+                    // keyword is not a resource, but rather a complex type declared alongside it.
+                    // Those are not discoverable resources. Modules that declare nothing are left alone.
+                    if (module.ExportedDscResources.Count > 0 &&
+                        !module.ExportedDscResources.Contains(keyword.Keyword))
+                    {
+                        return null;
+                    }
+
                     resource.Module = module;
                     resource.Path = module.Path;
                     resource.ParentPath = string.IsNullOrEmpty(module.Path) ? null : Path.GetDirectoryName(module.Path);
