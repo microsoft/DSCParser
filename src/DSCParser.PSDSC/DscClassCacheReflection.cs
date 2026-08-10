@@ -49,6 +49,13 @@ namespace DSCParser.PSDSC
         private static readonly MethodInfo? ResetDynamicKeywordsMethod =
             typeof(DynamicKeyword).GetMethod("Reset", BindingFlags.Public | BindingFlags.Static);
 
+        /// <summary>
+        /// Whether the internal DscClassCache type exists on this PowerShell edition. When it is
+        /// absent there is no engine cache that can go stale, so external-reset detection can be
+        /// skipped.
+        /// </summary>
+        public static bool IsDscClassCacheAvailable => CacheType is not null;
+
         public static void LoadDefaultCimKeywords()
         {
             try

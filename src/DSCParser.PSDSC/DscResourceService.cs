@@ -48,6 +48,12 @@ namespace DSCParser.PSDSC
 
             try
             {
+                // The DSC engine clears its internal class cache whenever a Configuration block
+                // is compiled to MOF in this process. That invalidates the process-wide import
+                // bookkeeping below, so discovery would skip re-importing resources and return
+                // zero results. Detect the external reset and clear the bookkeeping first.
+                DscKeywordRegistry.HandleExternalCacheReset();
+
                 DscKeywordRegistry.EnsureDefaultKeywordsLoaded();
 
                 var modules = GetModuleList(moduleName) ?? [];

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Management.Automation;
+using System.Management.Automation.Language;
 
 namespace DSCParser.PSDSC
 {
@@ -98,6 +99,37 @@ namespace DSCParser.PSDSC
 
             DscClassCacheReflection.LoadDefaultCimKeywords();
             _defaultKeywordsLoaded = true;
+        }
+
+        /// <summary>
+        /// The DSC engine clears its internal class cache whenever a Configuration block is
+        /// compiled to MOF in this process. The import bookkeeping in this class then no longer
+        /// matches engine state: resources appear already imported, so discovery skips re-importing
+        /// them and returns zero results. Detects that mismatch and resets every cached import so
+        /// the next call rebuilds the class cache. Returns true when a reset was performed.
+        /// </summary>
+        public static bool HandleExternalCacheReset()
+        {
+            if (!DscClassCacheReflection.IsDscClassCacheAvailable)
+            {
+                return false;
+            }
+
+            if (ImportedModules.Count == 0 && !_defaultKeywordsLoaded)
+            {
+                return false;
+            }
+
+            if (DscClassCacheReflection.GetCachedKeywords() is IEnumerable<DynamicKeyword> keywords)
+            {
+                foreach (DynamicKeyword _ in keywords)
+                {
+                    return false;
+                }
+            }
+
+            Reset();
+            return true;
         }
 
         private static string GetModuleKey(string moduleName, Version? version)
