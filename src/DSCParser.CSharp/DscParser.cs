@@ -132,38 +132,52 @@ namespace DSCParser.CSharp
 
             dscContent = RemoveModuleVersionInfo(dscContent, modulesToRemoveVersionFrom);
 
-            List<ModuleReference> modulesToLoad = GetModulesToLoad(dscContent);
-            RegisterKeywords(modulesToLoad, errorPrefix);
-
-            // Parse the DSC configuration using PowerShell AST instead of with "Import-DscResource"
-            // to avoid loading modules from disk, which may be very slow with many class-based resources
-            ScriptBlockAst ast = Parser.ParseInput(
-                RemoveImportDscResourceStatements(dscContent), out Token[] tokens, out ParseError[] parseErrors);
-
-            // Find the Configuration definition
-            ConfigurationDefinitionAst? configAst = ast.Find(a => a is ConfigurationDefinitionAst, false) as ConfigurationDefinitionAst;
-
-            ReportParseErrors(parseErrors, configAst, errorPrefix);
-
-            if (configAst is null)
+            try
             {
-                throw new InvalidOperationException("No Configuration definition found in the DSC content");
+                List<ModuleReference> modulesToLoad = GetModulesToLoad(dscContent);
+                RegisterKeywords(modulesToLoad, errorPrefix);
+
+                // Parse the configuration keeping its Import-DscResource statements. The engine then
+                // arms the imported modules' keywords for this parse only, so resources resolve and the
+                // session is not left with resource keywords registered for every word, which would
+                // break later parsing of scripts that use those words as plain commands.
+                ScriptBlockAst ast = Parser.ParseInput(
+                    dscContent, out Token[] tokens, out ParseError[] parseErrors);
+
+                // Find the Configuration definition
+                ConfigurationDefinitionAst? configAst = ast.Find(a => a is ConfigurationDefinitionAst, false) as ConfigurationDefinitionAst;
+
+                ReportParseErrors(parseErrors, configAst, errorPrefix);
+
+                if (configAst is null)
+                {
+                    throw new InvalidOperationException("No Configuration definition found in the DSC content");
+                }
+
+                // Initialize DSC resources
+                InitializeDscResources(modulesToLoad, dscResourcesConverted);
+
+                // Get resource instances
+                List<DscResourceInstance> resourceInstances = GetResourceInstances(configAst, options);
+
+                // Add comment metadata if requested
+                List<DscResourceInstance> result = resourceInstances;
+                if (options.IncludeComments)
+                {
+                    result = UpdateWithMetadata(tokens, resourceInstances);
+                }
+
+                return result;
             }
-
-            // Initialize DSC resources
-            InitializeDscResources(modulesToLoad, dscResourcesConverted);
-
-            // Get resource instances
-            List<DscResourceInstance> resourceInstances = GetResourceInstances(configAst, options);
-
-            // Add comment metadata if requested
-            List<DscResourceInstance> result = resourceInstances;
-            if (options.IncludeComments)
+            finally
             {
-                result = UpdateWithMetadata(tokens, resourceInstances);
+                // Registering the resources as dynamic keywords arms the session tokenizer for the words
+                // they introduce. That would later break parsing of scripts that use those names as plain
+                // commands (a blueprint's trailing "<configurationName> -ConfigurationData ..." invocation,
+                // or "<ResourceName> @Parameters"). Drop the registered keyword instances now that the
+                // conversion no longer needs them, while keeping the cached definitions for later calls.
+                DscKeywordRegistry.RestoreParserState();
             }
-
-            return result;
         }
 
         /// <summary>
@@ -362,11 +376,6 @@ namespace DSCParser.CSharp
             }
 
             return modulesToLoad;
-        }
-
-        private static string RemoveImportDscResourceStatements(string content)
-        {
-            return ImportDscResourceStatementRegex.Replace(content, string.Empty);
         }
 
         private static void RegisterKeywords(List<ModuleReference> modulesToLoad, string errorPrefix)
