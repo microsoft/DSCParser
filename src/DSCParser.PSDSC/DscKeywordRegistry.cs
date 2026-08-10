@@ -65,7 +65,19 @@ namespace DSCParser.PSDSC
 
             if (ImportedModules.Contains(GetModuleKey(moduleName, version)))
             {
-                return true;
+                // Bookkeeping says imported, but only trust that while the engine still holds the
+                // keywords. A previous call restores the parser state after use, dropping the live
+                // keyword instances; without re-importing, parsing would no longer recognize the
+                // module's resources. Treat that as a stale import and forget the bookkeeping.
+                if (DscClassCacheReflection.GetCachedKeywords() is IEnumerable<DynamicKeyword> cached &&
+                    cached.Any(k => k.ImplementingModule is not null &&
+                                    k.ImplementingModule.Equals(moduleName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return true;
+                }
+
+                _ = ImportedModules.Remove(GetModuleKey(moduleName, version));
+                _ = ImportedModules.Remove(GetModuleKey(moduleName, null));
             }
 
             PSModuleInfo[] modules = ResolveModules(moduleName, version);
@@ -88,6 +100,20 @@ namespace DSCParser.PSDSC
             _defaultKeywordsLoaded = false;
             DscClassCacheReflection.ResetDynamicKeywords();
             DscClassCacheReflection.ClearCache();
+        }
+
+        /// <summary>
+        /// Clears the parser-scoped dynamic keyword instances the engine creates from the imported
+        /// resources. Once a keyword definition is registered in a session, the tokenizer recognizes
+        /// the word everywhere, and any later script that uses an equivalent name as an ordinary
+        /// command breaks - for example the trailing "configName -ConfigurationData ..." invocation
+        /// that blueprint exports append, or a call such as "ResourceName @Parameters". The cached
+        /// keyword definitions are left in place so resources remain discoverable and
+        /// ConvertTo-DSCObject keeps mapping resource instances within this process.
+        /// </summary>
+        public static void RestoreParserState()
+        {
+            DscClassCacheReflection.ResetDynamicKeywords();
         }
 
         internal static void EnsureDefaultKeywordsLoaded()

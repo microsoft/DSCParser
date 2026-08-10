@@ -113,6 +113,7 @@ namespace DSCParser.PSDSC
             finally
             {
                 DscResourceHelpers.ClearModuleCache();
+                DscKeywordRegistry.RestoreParserState();
             }
         }
 

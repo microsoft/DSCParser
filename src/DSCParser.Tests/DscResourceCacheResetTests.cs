@@ -182,6 +182,109 @@ public class DscResourceCacheResetTests
 
     #endregion
 
+    #region RestoreParserState contract
+
+    [Fact]
+    public void RestoreParserState_ShouldKeepCachedDefinitions()
+    {
+        if (!EngineCacheAvailable)
+        {
+            return;
+        }
+
+        try
+        {
+            DscKeywordRegistry.EnsureDefaultKeywordsLoaded();
+            SkipIfNoEngineKeywords();
+            var armed = KeywordCount();
+
+            // Restoring the parser must NOT wipe the cached keyword definitions: ConvertTo-DSCObject
+            // relies on them to map resource instances in the same process. It only un-arms the
+            // tokenizer so later scripts using the same words as plain commands still parse.
+            DscKeywordRegistry.RestoreParserState();
+
+            Assert.Equal(armed, KeywordCount());
+        }
+        finally
+        {
+            ResetRegistryState();
+        }
+    }
+
+    [Fact]
+    public void RestoreParserState_WhenNothingArmed_ShouldBeNoOpAndSafe()
+    {
+        if (!EngineCacheAvailable)
+        {
+            return;
+        }
+
+        try
+        {
+            Assert.Equal(0, KeywordCount());
+
+            DscKeywordRegistry.RestoreParserState();
+
+            Assert.Equal(0, KeywordCount());
+        }
+        finally
+        {
+            ResetRegistryState();
+        }
+    }
+
+    [Fact]
+    public void RestoreParserState_ShouldBeSafeToCallRepeatedly()
+    {
+        if (!EngineCacheAvailable)
+        {
+            return;
+        }
+
+        try
+        {
+            DscKeywordRegistry.RestoreParserState();
+            DscKeywordRegistry.RestoreParserState();
+            DscKeywordRegistry.RestoreParserState();
+
+            Assert.Equal(0, KeywordCount());
+        }
+        finally
+        {
+            ResetRegistryState();
+        }
+    }
+
+    [Fact]
+    public void GetDscResources_ShouldKeepResourcesDiscoverableAfterwards()
+    {
+        if (!EngineCacheAvailable)
+        {
+            return;
+        }
+
+        try
+        {
+            var before = DscResourceService.GetDscResources().Count;
+            if (before == 0)
+            {
+                Assert.Skip("No DSC resources are discoverable in this environment.");
+            }
+
+            // The session is restored after discovery, so a follow-up conversion still finds the
+            // same resource set rather than a depleted cache.
+            var after = DscResourceService.GetDscResources().Count;
+
+            Assert.Equal(before, after);
+        }
+        finally
+        {
+            ResetRegistryState();
+        }
+    }
+
+    #endregion
+
     private static void ResetRegistryState()
     {
         // Restore the natural process baseline (keyword cache empty, nothing imported) so tests
