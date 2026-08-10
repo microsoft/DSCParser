@@ -133,12 +133,25 @@ namespace DSCParser.CSharp
             dscContent = RemoveModuleVersionInfo(dscContent, modulesToRemoveVersionFrom);
 
             List<ModuleReference> modulesToLoad = GetModulesToLoad(dscContent);
-            RegisterKeywords(modulesToLoad, errorPrefix);
 
             // Parse the DSC configuration using PowerShell AST instead of with "Import-DscResource"
-            // to avoid loading modules from disk, which may be very slow with many class-based resources
-            ScriptBlockAst ast = Parser.ParseInput(
-                RemoveImportDscResourceStatements(dscContent), out Token[] tokens, out ParseError[] parseErrors);
+            // to avoid loading modules from disk, which may be very slow with many class-based resources.
+            // The DynamicKeyword table only exists for the duration of the parse because leaving it populated
+            // breaks the engine's own Configuration-to-MOF compilation afterwards.
+            ScriptBlockAst ast;
+            Token[] tokens;
+            ParseError[] parseErrors;
+            try
+            {
+                RegisterKeywords(modulesToLoad, errorPrefix);
+                DscKeywordRegistry.MaterializeKeywordTable();
+                ast = Parser.ParseInput(
+                    RemoveImportDscResourceStatements(dscContent), out tokens, out parseErrors);
+            }
+            finally
+            {
+                DscKeywordRegistry.ClearKeywordTable();
+            }
 
             // Find the Configuration definition
             ConfigurationDefinitionAst? configAst = ast.Find(a => a is ConfigurationDefinitionAst, false) as ConfigurationDefinitionAst;
