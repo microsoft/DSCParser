@@ -137,3 +137,57 @@ jobs:
           }
 
           Write-Host "Class-based discovery and parsing validated against $($classBasedModule.Name) ($($classBased.Count) class-based resources)."
+
+          # Regression where the engine wipes its DSC caches when a Configuration is compiled to MOF.
+          # Test against that behavior by simulating a wipe of the engine's caches and asserting that both entry points self-heal.
+          $reflection = [DSCParser.PSDSC.DscResourceService].Assembly.GetType('DSCParser.PSDSC.DscClassCacheReflection')
+          $reflection.GetMethod('ClearCache').Invoke($null, $null)
+          $reflection.GetMethod('ResetDynamicKeywords').Invoke($null, $null)
+
+          $parsed = @(ConvertTo-DSCObject -Content $config -ErrorAction Stop)
+          if ($parsed.Count -ne 1 -or $parsed[0].ResourceName -ne $resource.Name)
+          {
+              throw "ConvertTo-DSCObject did not recover after the engine DSC caches were cleared."
+          }
+
+          $resourcesAfterWipe = @(Get-DscResourceV2 -Module $classBasedModule.Name -ErrorAction Stop)
+          if ($resourcesAfterWipe.Count -ne $resources.Count)
+          {
+              throw "Get-DscResourceV2 returned $($resourcesAfterWipe.Count) resources after the engine DSC caches were cleared, expected $($resources.Count)."
+          }
+
+          Write-Host "Stale engine cache recovery validated (deterministic wipe)."
+
+          # Same regression through the real trigger with compiling a Configuration to MOF.
+          if (Get-Module -ListAvailable -Name PSDesiredStateConfiguration)
+          {
+              Import-Module PSDesiredStateConfiguration -ErrorAction Stop
+              $wipeOutput = Join-Path ([System.IO.Path]::GetTempPath()) 'dscparser-wipe'
+              # Compile in this process; even a failing compile wipes the caches.
+              try
+              {
+                  Invoke-Expression "Configuration DscParserWipeTest { Node localhost { } }`nDscParserWipeTest -OutputPath '$wipeOutput'" | Out-Null
+              }
+              catch
+              {
+                  throw "Compiling a Configuration after using DSCParser failed: $_"
+              }
+
+              $parsed = @(ConvertTo-DSCObject -Content $config -ErrorAction Stop)
+              if ($parsed.Count -ne 1 -or $parsed[0].ResourceName -ne $resource.Name)
+              {
+                  throw "ConvertTo-DSCObject did not recover after a Configuration was compiled to MOF."
+              }
+
+              $resourcesAfterCompile = @(Get-DscResourceV2 -Module $classBasedModule.Name -ErrorAction Stop)
+              if ($resourcesAfterCompile.Count -ne $resources.Count)
+              {
+                  throw "Get-DscResourceV2 returned $($resourcesAfterCompile.Count) resources after a MOF compile, expected $($resources.Count)."
+              }
+
+              Write-Host "Stale engine cache recovery validated (real MOF compile)."
+          }
+          else
+          {
+              Write-Host "::warning::PSDesiredStateConfiguration is not installed; skipping the MOF-compile recovery validation."
+          }

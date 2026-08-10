@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Management.Automation;
+using System.Management.Automation.Language;
 
 namespace DSCParser.PSDSC
 {
@@ -14,14 +15,57 @@ namespace DSCParser.PSDSC
     /// PowerShell rebuilds this registration from scratch every time it parses a configuration that
     /// contains an Import-DSCResource statement, probing the file system for a schema file per
     /// resource. On a module the size of Microsoft365DSC that dominates the cost of parsing. Keeping
-    /// the registration for the lifetime of the process lets callers strip the Import-DSCResource
-    /// statement and skip that work entirely.
+    /// the registration alive lets callers strip the Import-DSCResource statement and skip that
+    /// work entirely.
     /// </remarks>
     public static class DscKeywordRegistry
     {
-        private static readonly HashSet<string> ImportedModules = new(StringComparer.OrdinalIgnoreCase);
+        [ThreadStatic]
+        private static HashSet<string>? t_importedModules;
 
-        private static bool _defaultKeywordsLoaded;
+        private static HashSet<string> ImportedModules => t_importedModules ??= new(StringComparer.OrdinalIgnoreCase);
+
+        [ThreadStatic]
+        private static bool t_defaultKeywordsLoaded;
+
+        [ThreadStatic]
+        private static bool t_engineUnsupported;
+
+        [ThreadStatic]
+        private static List<DynamicKeyword>? t_defaultTableKeywords;
+
+        [ThreadStatic]
+        private static bool t_staleWarningIssued;
+
+        [ThreadStatic]
+        private static int t_expectedCachedKeywordCount;
+
+        // Registered into the class cache by LoadDefaultCimKeywords and dies with it, so its
+        // absence while the bookkeeping claims otherwise means the engine wiped the cache.
+        private const string ClassCacheSentinel = "OMI_ConfigurationDocument";
+
+        // Lives in the DynamicKeyword table (not the class cache) and is re-added by
+        // LoadDefaultCimKeywords, so it tells whether the table currently holds the defaults.
+        private const string NodeKeyword = "Node";
+
+        private static bool EngineStateIsFresh
+        {
+            get
+            {
+                if (!DscClassCacheReflection.HasCachedClass(ClassCacheSentinel))
+                {
+                    return false;
+                }
+
+                return t_expectedCachedKeywordCount == 0
+                    || CurrentCachedKeywordCount() >= t_expectedCachedKeywordCount;
+            }
+        }
+
+        private static int CurrentCachedKeywordCount()
+        {
+            return DscClassCacheReflection.GetCachedKeywords()?.Count() ?? 0;
+        }
 
         /// <summary>
         /// Registers the resources of the supplied modules, skipping modules already registered.
@@ -47,6 +91,8 @@ namespace DSCParser.PSDSC
                 // A later request that names no version is satisfied by any registered version.
                 _ = ImportedModules.Add(GetModuleKey(module.Name, null));
             }
+
+            t_expectedCachedKeywordCount = CurrentCachedKeywordCount();
         }
 
         /// <summary>
@@ -61,6 +107,9 @@ namespace DSCParser.PSDSC
             {
                 return false;
             }
+
+            // Heals a wiped engine cache before the fast path below can return a stale answer.
+            EnsureDefaultKeywordsLoaded();
 
             if (ImportedModules.Contains(GetModuleKey(moduleName, version)))
             {
@@ -79,25 +128,132 @@ namespace DSCParser.PSDSC
         }
 
         /// <summary>
-        /// Drops every registered keyword and the underlying class cache.
+        /// Drops every registered keyword and the underlying class cache on the current thread.
         /// </summary>
         public static void Reset()
         {
             ImportedModules.Clear();
-            _defaultKeywordsLoaded = false;
+            t_defaultKeywordsLoaded = false;
+            t_engineUnsupported = false;
+            t_defaultTableKeywords = null;
+            t_expectedCachedKeywordCount = 0;
             DscClassCacheReflection.ResetDynamicKeywords();
             DscClassCacheReflection.ClearCache();
         }
 
         internal static void EnsureDefaultKeywordsLoaded()
         {
-            if (_defaultKeywordsLoaded)
+            _ = HandleExternalCacheReset();
+
+            if (t_defaultKeywordsLoaded)
             {
                 return;
             }
 
             DscClassCacheReflection.LoadDefaultCimKeywords();
-            _defaultKeywordsLoaded = true;
+            t_defaultKeywordsLoaded = true;
+            t_engineUnsupported = !EngineStateIsFresh;
+
+            List<DynamicKeyword> snapshot = [];
+            IEnumerable<string> defaultNames =
+                (DscClassCacheReflection.GetCachedKeywords()?.Select(k => k.Keyword) ?? [])
+                .Concat([NodeKeyword, "Import-DscResource"]);
+            foreach (string name in defaultNames.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (DynamicKeyword.GetKeyword(name) is { } keyword)
+                {
+                    snapshot.Add(keyword);
+                }
+            }
+
+            t_defaultTableKeywords = snapshot;
+            t_expectedCachedKeywordCount = CurrentCachedKeywordCount();
+        }
+
+        /// <summary>
+        /// The DSC engine clears its internal class cache and DynamicKeyword table whenever a
+        /// Configuration block is compiled to MOF in this process. This means that this class
+        /// then no longer matches engine state, resulting in no resource results although
+        /// shown as imported.
+        /// </summary>
+        public static bool HandleExternalCacheReset()
+        {
+            if (t_engineUnsupported || !DscClassCacheReflection.IsDscClassCacheAvailable)
+            {
+                return false;
+            }
+
+            if (ImportedModules.Count == 0 && !t_defaultKeywordsLoaded)
+            {
+                return false;
+            }
+
+            if (EngineStateIsFresh)
+            {
+                return false;
+            }
+
+            if (!t_staleWarningIssued)
+            {
+                t_staleWarningIssued = true;
+                DscResourceService.ReportWarning(
+                    "The PowerShell engine cleared its internal DSC caches (typically caused by compiling a "
+                    + "Configuration to MOF). DSCParser re-imported its DSC resource keywords automatically.");
+            }
+
+            Reset();
+            return true;
+        }
+
+        /// <summary>
+        /// Fills the engine's DynamicKeyword table with the default CIM keywords (including Node)
+        /// and every keyword the class cache holds, so a configuration can be parsed without any
+        /// Import-DscResource statement. Pair with <see cref="ClearKeywordTable"/> once parsing is
+        /// done.
+        /// </summary>
+        public static void MaterializeKeywordTable()
+        {
+            EnsureDefaultKeywordsLoaded();
+
+            List<DynamicKeyword>? cachedKeywords = DscClassCacheReflection.GetCachedKeywords()?.ToList();
+
+            if (!DynamicKeyword.ContainsKeyword(NodeKeyword))
+            {
+                if (t_defaultTableKeywords is { Count: > 0 } defaults)
+                {
+                    foreach (DynamicKeyword keyword in defaults)
+                    {
+                        if (!DynamicKeyword.ContainsKeyword(keyword.Keyword))
+                        {
+                            DynamicKeyword.AddKeyword(keyword);
+                        }
+                    }
+                }
+                else if (ImportedModules.Count == 0)
+                {
+                    DscClassCacheReflection.LoadDefaultCimKeywords();
+                }
+            }
+
+            if (cachedKeywords is not null)
+            {
+                foreach (DynamicKeyword keyword in cachedKeywords)
+                {
+                    if (!DynamicKeyword.ContainsKeyword(keyword.Keyword))
+                    {
+                        DynamicKeyword.AddKeyword(keyword);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Empties the engine's DynamicKeyword table while keeping the class cache. Every public
+        /// operation must end with this.
+        /// </summary>
+        public static void ClearKeywordTable()
+        {
+            DscClassCacheReflection.ResetDynamicKeywords();
         }
 
         private static string GetModuleKey(string moduleName, Version? version)

@@ -155,9 +155,11 @@ function ConvertTo-DSCObject
         }
 
         # Buffer diagnostics and emit them after the call, so Write-Warning runs on the pipeline
-        # thread and honours the caller's $WarningPreference. The sink is a process-wide static.
+        # thread and honours the caller's $WarningPreference. The sinks are process-wide statics.
         $parserWarnings = [System.Collections.Generic.List[System.String]]::new()
-        [DSCParser.CSharp.DscParser]::WarningSink = [System.Action[System.String]] { param($Message) $parserWarnings.Add($Message) }
+        $warningSink = [System.Action[System.String]] { param($Message) $parserWarnings.Add($Message) }
+        [DSCParser.CSharp.DscParser]::WarningSink = $warningSink
+        [DSCParser.PSDSC.DscResourceService]::WarningSink = $warningSink
 
         try
         {
@@ -174,6 +176,7 @@ function ConvertTo-DSCObject
         finally
         {
             [DSCParser.CSharp.DscParser]::WarningSink = $null
+            [DSCParser.PSDSC.DscResourceService]::WarningSink = $null
             foreach ($parserWarning in $parserWarnings)
             {
                 Write-Warning -Message $parserWarning

@@ -107,6 +107,7 @@ namespace DSCParser.PSDSC
             finally
             {
                 DscResourceHelpers.ClearModuleCache();
+                DscKeywordRegistry.ClearKeywordTable();
             }
         }
 

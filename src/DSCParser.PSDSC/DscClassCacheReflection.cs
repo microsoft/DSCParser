@@ -49,6 +49,8 @@ namespace DSCParser.PSDSC
         private static readonly MethodInfo? ResetDynamicKeywordsMethod =
             typeof(DynamicKeyword).GetMethod("Reset", BindingFlags.Public | BindingFlags.Static);
 
+        public static bool IsDscClassCacheAvailable => CacheType is not null;
+
         public static void LoadDefaultCimKeywords()
         {
             try
@@ -106,6 +108,25 @@ namespace DSCParser.PSDSC
             return GetFileDefiningClassMethod?.Invoke(null, [className]) as List<string>;
         }
 
+        /// <summary>
+        /// Whether the engine's class cache currently holds a definition for the given class.
+        /// Returns false when the lookup method is unavailable or throws. Staleness probes must
+        /// pair it with <see cref="IsDscClassCacheAvailable"/> to avoid misreading an unsupported
+        /// host as a wiped cache.
+        /// </summary>
+        public static bool HasCachedClass(string className)
+        {
+            try
+            {
+                return GetFileDefiningClassMethod is not null
+                    && GetFileDefiningClass(className) is { Count: > 0 };
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public static void ClearCache()
         {
             try
@@ -122,6 +143,7 @@ namespace DSCParser.PSDSC
         {
             _ = ResetDynamicKeywordsMethod?.Invoke(null, null);
         }
+
 
         private static Dictionary<string, ScriptBlock> NewFunctionTable()
         {

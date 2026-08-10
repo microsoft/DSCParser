@@ -12,7 +12,7 @@
     RootModule = 'DSCParser.psm1'
 
     # Version number of this module.
-    ModuleVersion = '3.1.0.0'
+    ModuleVersion = '3.1.0.1'
 
     # ID used to uniquely identify this module
     GUID = 'e168239a-233d-468d-9025-d6dfc0e4e2b6'
@@ -110,7 +110,7 @@
             IconUri = 'https://github.com/Microsoft365DSC/DSCParser/blob/master/Images/DSCParser.png?raw=true'
 
             # ReleaseNotes of this module
-            ReleaseNotes = '* Refactored the module and fixed an issue with wildcard pattern matching in the Get-DscResourceV2 cmdlet.'
+            ReleaseNotes = '* Fixed a regression where compiling a Configuration to MOF cleared the engine DSC caches underneath DSCParser, after which Get-DscResourceV2 returned no resources and ConvertTo-DSCObject failed. The keyword registry now detects the wipe and re-imports automatically.'
         } # End of PSData hashtable
 
     } # End of PrivateData hashtable
