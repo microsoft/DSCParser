@@ -119,6 +119,44 @@ public class DscParserConvertFromDscObjectTests
         Assert.DoesNotContain("\"$ConfigData.Credential\"", result);
     }
 
+    [Theory]
+    [InlineData("$OrganizationName\\Default")]
+    [InlineData("$Price=100")]
+    [InlineData("$(Get-Date)")]
+    public void ConvertFromDscObject_DollarStringThatIsNotAVariable_ShouldBeQuoted(string value)
+    {
+        var entries = new List<Hashtable>
+        {
+            new()
+            {
+                ["CIMInstance"] = "Test",
+                ["Identity"] = value
+            }
+        };
+
+        string result = DscParser.ConvertFromDscObject(entries, 1);
+
+        Assert.Contains($"\"{value}\"", result);
+    }
+
+    [Fact]
+    public void ConvertFromDscObject_ScopedVariableString_ShouldNotBeQuoted()
+    {
+        var entries = new List<Hashtable>
+        {
+            new()
+            {
+                ["CIMInstance"] = "Test",
+                ["Credential"] = "$script:Credential"
+            }
+        };
+
+        string result = DscParser.ConvertFromDscObject(entries, 1);
+
+        Assert.Contains("= $script:Credential", result);
+        Assert.DoesNotContain("\"$script:Credential\"", result);
+    }
+
     [Fact]
     public void ConvertFromDscObject_IntegerProperty_ShouldNotBeQuoted()
     {
