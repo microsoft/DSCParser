@@ -36,6 +36,14 @@ namespace DSCParser.CSharp
 
         private const string ImportDscResourcePlaceholder = "DscParserImportDscResource";
 
+        // Matches a string that is syntactically nothing but a variable reference,
+        // optionally scoped and with member access: $name, $scope:name, $config.Credential.
+        // Anything else that merely starts with '$' (e.g. "$OrganizationName\Default")
+        // must be emitted quoted or the generated text does not reparse.
+        private static readonly Regex BareVariableReferenceRegex = new(
+            @"^\$(?:\w+:)?\w+(?:\.\w+)*$",
+            RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
         /// <summary>
         /// Receives non-fatal diagnostics such as unresolvable modules. When unset, they are dropped
         /// rather than written to the console, which would corrupt a PowerShell host's output stream.
@@ -905,8 +913,8 @@ namespace DSCParser.CSharp
             {
                 case string strValue:
                     AppendPropertyPrefix(result, property, additionalSpaces, childSpacer);
-                    // A string starting with $ and containing no spaces is a variable reference, not a literal
-                    if (strValue.StartsWith("$", StringComparison.Ordinal) && !strValue.StartsWith("$($", StringComparison.Ordinal) && !strValue.Contains(' '))
+                    // Only a string that is entirely a variable reference is emitted bare
+                    if (BareVariableReferenceRegex.IsMatch(strValue))
                     {
                         _ = result.AppendLine(strValue);
                     }
