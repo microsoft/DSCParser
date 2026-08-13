@@ -330,3 +330,8 @@ ASALocalRun/
 
 # MFractors (Xamarin productivity tool) working folder
 .mfractor/
+
+# Test harness output
+CodeCov.xml
+TestResults/
+src/**/TestResults/

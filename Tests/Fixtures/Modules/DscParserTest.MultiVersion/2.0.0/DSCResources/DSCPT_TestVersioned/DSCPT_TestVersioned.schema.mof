@@ -1,0 +1,6 @@
+[ClassVersion("2.0.0.0"), FriendlyName("DscParserTestVersioned")]
+class DSCPT_TestVersioned : OMI_BaseResource
+{
+    [Key, Description("Name of the item.")] String Name;
+    [Write, Description("Value of the item.")] String Value;
+};

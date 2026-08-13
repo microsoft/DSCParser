@@ -121,16 +121,26 @@ public class DscParserPrivateMethodTests
     #region ClearCaches
 
     [Fact]
-    public void ClearCaches_ShouldClearResourceAndModuleCaches()
+    public void ClearCaches_ShouldMakeASubsequentConversionRequireResourcesAgain()
     {
+        const string content = "Configuration Test { Node localhost { } }";
+
         try
         {
+            _ = DscParser.ConvertToDscObject(
+                content: content,
+                dscResources: [new DscResourceInfo { Name = "Archive" }]);
+
             _clearCaches.Invoke(null, null);
 
-            Assert.True(true);
+            var exception = Assert.Throws<InvalidOperationException>(
+                () => DscParser.ConvertToDscObject(content: content));
+
+            Assert.Contains("No DSC resources loaded", exception.Message, StringComparison.Ordinal);
         }
         finally
         {
+            _clearCaches.Invoke(null, null);
             DscKeywordRegistry.Reset();
         }
     }
@@ -335,15 +345,22 @@ public class DscParserPrivateMethodTests
     #region InitializeDscResources
 
     [Fact]
-    public void InitializeDscResources_WithNoModulesToLoad_ShouldReturnWithoutAdding()
+    public void InitializeDscResources_WithNoModulesToLoad_ShouldLeaveTheResourceCacheEmpty()
     {
         try
         {
+            DscParser.ClearCaches();
             var modules = (System.Collections.IList)_getModulesToLoad.Invoke(null, ["Configuration Foo { }"])!;
+            Assert.Empty(modules);
 
-            _initializeDscResources.Invoke(null, [modules, new List<DscResourceInfo>()]);
+            _initializeDscResources.Invoke(
+                null,
+                [modules, new List<DscResourceInfo> { new() { Name = "Archive" } }]);
 
-            Assert.True(true);
+            var exception = Assert.Throws<InvalidOperationException>(
+                () => DscParser.ConvertToDscObject(content: "Configuration Test { Node localhost { } }"));
+
+            Assert.Contains("No DSC resources loaded", exception.Message, StringComparison.Ordinal);
         }
         finally
         {
@@ -566,8 +583,6 @@ public class DscParserPrivateMethodTests
         DscParser.WarningSink = null;
 
         _reportWarning.Invoke(null, ["ignored"]);
-
-        Assert.True(true);
     }
 
     #endregion
