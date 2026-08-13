@@ -1,0 +1,16 @@
+[ClassVersion("1.0.0.0")]
+class DSCPT_TestSetting
+{
+    [Write, Description("Name of the setting.")] String Name;
+    [Write, Description("Value of the setting.")] String Value;
+    [Write, Description("Whether the setting is enforced.")] Boolean Enforced;
+};
+
+[ClassVersion("1.0.0.0"), FriendlyName("DscParserTestCimHost")]
+class DSCPT_TestCimHost : OMI_BaseResource
+{
+    [Key, Description("Name of the host.")] String Name;
+    [Write, Description("Free form description.")] String Description;
+    [Write, EmbeddedInstance("DSCPT_TestSetting"), Description("The single default setting.")] String DefaultSetting;
+    [Write, EmbeddedInstance("DSCPT_TestSetting"), Description("All configured settings.")] String Settings[];
+};

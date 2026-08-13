@@ -74,56 +74,107 @@ public class GetDscResourceCommandTests
         Assert.Empty(results);
     }
 
-    [Fact]
-    public void Invoke_WithStringModuleParameter_ShouldRun()
+    private const string MissingModuleName = "__GetDscResourceV2_NotInstalled_Module__";
+
+    private static List<string> InvokeAndCaptureVerbose(PowerShell ps)
     {
-        SkipIfNoRunspace();
+        _ = ps.AddParameter("Verbose", new SwitchParameter(true)).Invoke();
 
-        using var ps = CreateCmdletPowerShell();
-        _ = ps.AddCommand("Get-DscResourceV2")
-            .AddParameter("Module", "__GetDscResourceV2_NotInstalled_Module__")
-            .Invoke();
-
-        Assert.True(true);
+        return [.. ps.Streams.Verbose.Select(v => v.Message)];
     }
 
     [Fact]
-    public void Invoke_WithModuleSpecificationParameter_ShouldRun()
+    public void Invoke_WithStringModuleParameter_ShouldFilterOnTheParsedModuleName()
     {
         SkipIfNoRunspace();
 
         using var ps = CreateCmdletPowerShell();
-        _ = ps.AddCommand("Get-DscResourceV2")
-            .AddParameter("Module", new ModuleSpecification("__GetDscResourceV2_NotInstalled_Module__"))
-            .Invoke();
+        _ = ps.AddCommand("Get-DscResourceV2").AddParameter("Module", MissingModuleName);
 
-        Assert.True(true);
+        Assert.Contains($"Filtering resources by module: {MissingModuleName}", InvokeAndCaptureVerbose(ps));
     }
 
     [Fact]
-    public void Invoke_WithHashtableModuleParameter_ShouldRun()
+    public void Invoke_WithModuleSpecificationParameter_ShouldFilterOnItsName()
     {
         SkipIfNoRunspace();
 
         using var ps = CreateCmdletPowerShell();
-        _ = ps.AddCommand("Get-DscResourceV2")
-            .AddParameter("Module", new Hashtable { ["ModuleName"] = "__GetDscResourceV2_NotInstalled_Module__" })
-            .Invoke();
+        _ = ps.AddCommand("Get-DscResourceV2").AddParameter("Module", new ModuleSpecification(MissingModuleName));
 
-        Assert.True(true);
+        Assert.Contains($"Filtering resources by module: {MissingModuleName}", InvokeAndCaptureVerbose(ps));
     }
 
     [Fact]
-    public void Invoke_WithSyntaxSwitch_ShouldRun()
+    public void Invoke_WithHashtableModuleParameter_ShouldFilterOnTheModuleNameKey()
     {
         SkipIfNoRunspace();
 
         using var ps = CreateCmdletPowerShell();
         _ = ps.AddCommand("Get-DscResourceV2")
+            .AddParameter("Module", new Hashtable { ["ModuleName"] = MissingModuleName });
+
+        Assert.Contains($"Filtering resources by module: {MissingModuleName}", InvokeAndCaptureVerbose(ps));
+    }
+
+    [Fact]
+    public void Invoke_WithHashtableModuleParameterWithoutModuleNameKey_ShouldFallBackToTheHashtableItself()
+    {
+        SkipIfNoRunspace();
+
+        using var ps = CreateCmdletPowerShell();
+        _ = ps.AddCommand("Get-DscResourceV2")
+            .AddParameter("Module", new Hashtable { ["Unexpected"] = MissingModuleName });
+
+        Assert.Contains(InvokeAndCaptureVerbose(ps), v => v.StartsWith("Filtering resources by module: System.Collections.Hashtable", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Invoke_WithSyntaxSwitch_ShouldEmitSyntaxStringsInsteadOfResourceObjects()
+    {
+        SkipIfNoRunspace();
+
+        using var ps = CreateCmdletPowerShell();
+        var results = ps.AddCommand("Get-DscResourceV2")
+            .AddParameter("Name", new[] { "Archive" })
             .AddParameter("Syntax", new SwitchParameter(true))
             .Invoke();
 
-        Assert.True(true);
+        if (results.Count == 0)
+        {
+            Assert.Skip("The PowerShell engine in this environment did not register the 'Archive' resource.");
+        }
+
+        Assert.All(results, r => Assert.IsType<string>(r.BaseObject));
+        Assert.StartsWith("Archive [String] #ResourceName", (string)results[0].BaseObject, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Invoke_WithoutSyntaxSwitch_ShouldEmitDscResourceInfoObjects()
+    {
+        SkipIfNoRunspace();
+
+        using var ps = CreateCmdletPowerShell();
+        var results = ps.AddCommand("Get-DscResourceV2").AddParameter("Name", new[] { "Archive" }).Invoke();
+
+        if (results.Count == 0)
+        {
+            Assert.Skip("The PowerShell engine in this environment did not register the 'Archive' resource.");
+        }
+
+        Assert.All(results, r => Assert.IsType<DscResourceInfo>(r.BaseObject));
+        Assert.Equal("Archive", ((DscResourceInfo)results[0].BaseObject).Name);
+    }
+
+    [Fact]
+    public void Invoke_WithoutNameFilter_ShouldNotReportAnyMissingResource()
+    {
+        SkipIfNoRunspace();
+
+        using var ps = CreateCmdletPowerShell();
+        _ = ps.AddCommand("Get-DscResourceV2").Invoke();
+
+        Assert.DoesNotContain(ps.Streams.Error, e => e.Exception is ItemNotFoundException);
     }
 
     #endregion
@@ -137,8 +188,6 @@ public class GetDscResourceCommandTests
 
         _checkResourcesFound.Invoke(cmdlet, [null, new List<DscResourceInfo>()]);
         _checkResourcesFound.Invoke(cmdlet, [Array.Empty<string>(), new List<DscResourceInfo>()]);
-
-        Assert.True(true);
     }
 
     #endregion

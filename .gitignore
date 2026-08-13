@@ -8,8 +8,8 @@
 *.user
 *.userosscache
 *.sln.docstates
-PowerShellModule/
-DSCParser/
+/PowerShellModule/
+/DSCParser/
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
@@ -330,3 +330,8 @@ ASALocalRun/
 
 # MFractors (Xamarin productivity tool) working folder
 .mfractor/
+
+# Test harness output
+CodeCov.xml
+TestResults/
+src/**/TestResults/
