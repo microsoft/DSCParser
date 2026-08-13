@@ -13,7 +13,7 @@ public class DscKeywordRegistryTests
     [Fact]
     public void EnsureRegistered_WithNullOrEmptyName_ShouldReturnFalse()
     {
-        Assert.False(DscKeywordRegistry.EnsureRegistered(null, null));
+        Assert.False(DscKeywordRegistry.EnsureRegistered(null!, null));
         Assert.False(DscKeywordRegistry.EnsureRegistered(string.Empty, null));
     }
 
@@ -82,7 +82,7 @@ public class DscKeywordRegistryTests
     [Fact]
     public void ImportModules_WithNull_ShouldBeNoOp()
     {
-        DscKeywordRegistry.ImportModules(null);
+        DscKeywordRegistry.ImportModules(null!);
     }
 
     [Fact]

@@ -196,7 +196,7 @@ public class DscParserPrivateMethodTests
     {
         var modules = (System.Collections.IList)_getModulesToLoad.Invoke(null, [content])!;
 
-        var reference = Assert.Single(modules);
+        var reference = Assert.Single(modules)!;
         var name = (string?)reference.GetType().GetProperty("Name")!.GetValue(reference);
         var version = (Version?)reference.GetType().GetProperty("Version")!.GetValue(reference);
 
@@ -232,7 +232,7 @@ public class DscParserPrivateMethodTests
     {
         var modules = (System.Collections.IList)_getModulesToLoad.Invoke(null, ["import-dscresource -MODULENAME Foo -moduleversion 3.1.0"])!;
 
-        var reference = Assert.Single(modules);
+        var reference = Assert.Single(modules)!;
         Assert.Equal("Foo", (string?)reference.GetType().GetProperty("Name")!.GetValue(reference));
         Assert.Equal(new Version("3.1.0"), (Version?)reference.GetType().GetProperty("Version")!.GetValue(reference));
     }

@@ -244,7 +244,7 @@ public class DscParserEndToEndTests
         try
         {
             Assert.Throws<ArgumentException>(
-                () => DscParser.ConvertToDscObject(path: null, content: null));
+                () => DscParser.ConvertToDscObject(path: null, content: null!));
         }
         finally
         {

@@ -38,7 +38,7 @@ internal static class PsModuleInfoFactory
     public static void SetVersion(PSModuleInfo module, Version version)
     {
         var setter = typeof(PSModuleInfo).GetProperty("Version", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
-            .GetSetMethod(true);
+            .GetSetMethod(true)!;
         setter.Invoke(module, [version]);
     }
 }
