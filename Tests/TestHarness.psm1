@@ -225,13 +225,21 @@ function Invoke-PesterTest
 
         Import-Module -Name $modulePath -Force
 
+        $unitTestRoot = Join-Path -Path $RepositoryRoot -ChildPath 'Tests\Unit'
+
         $filesToExecute = if ([System.String]::IsNullOrEmpty($DscTestsPath))
         {
-            @(Get-ChildItem -Path (Join-Path -Path $RepositoryRoot -ChildPath 'Tests\Unit') -Recurse -Filter '*.Tests.ps1').FullName
+            @(Get-ChildItem -Path $unitTestRoot -Recurse -Filter '*.Tests.ps1' -ErrorAction SilentlyContinue |
+                    Select-Object -ExpandProperty FullName)
         }
         else
         {
             @($DscTestsPath)
+        }
+
+        if ($filesToExecute.Count -eq 0)
+        {
+            throw "No Pester test files were found under '$unitTestRoot'."
         }
 
         $container = New-PesterContainer -Path $filesToExecute
