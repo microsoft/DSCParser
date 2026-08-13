@@ -68,4 +68,13 @@ public class StringExtensionsTests
     {
         Assert.True("TestResource.Schema.Psm1".Contains(".schema.psm1", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public void Contains_StaticCall_ShouldMatchCaseInsensitively()
+    {
+        // The BCL string.Contains(string, StringComparison) overload shadows the extension method
+        // for instance calls, so invoke the extension through its declaring type directly.
+        Assert.True(StringExtensions.Contains("Hello World", "hello", StringComparison.OrdinalIgnoreCase));
+        Assert.False(StringExtensions.Contains("Hello World", "xyz", StringComparison.OrdinalIgnoreCase));
+    }
 }
