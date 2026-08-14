@@ -12,7 +12,7 @@
     RootModule = 'DSCParser.psm1'
 
     # Version number of this module.
-    ModuleVersion = '3.1.0.2'
+    ModuleVersion = '3.1.0.3'
 
     # ID used to uniquely identify this module
     GUID = 'e168239a-233d-468d-9025-d6dfc0e4e2b6'
@@ -110,7 +110,7 @@
             IconUri = 'https://github.com/Microsoft365DSC/DSCParser/blob/master/Images/DSCParser.png?raw=true'
 
             # ReleaseNotes of this module
-            ReleaseNotes = '* Fixed an issue where variables in strings were not being parsed and / or converted correctly.'
+            ReleaseNotes = '* Add conversion for non-installed DSC resources based on a provided schema'
         } # End of PSData hashtable
 
     } # End of PrivateData hashtable

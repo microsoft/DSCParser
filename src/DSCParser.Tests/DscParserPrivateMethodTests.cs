@@ -240,11 +240,11 @@ public class DscParserPrivateMethodTests
     [Fact]
     public void GetModulesToLoad_WithCaseInsensitiveNames_ShouldExtract()
     {
-        var modules = (System.Collections.IList)_getModulesToLoad.Invoke(null, ["import-dscresource -MODULENAME Foo -moduleversion 3.1.0"])!;
+        var modules = (System.Collections.IList)_getModulesToLoad.Invoke(null, ["import-dscresource -MODULENAME Foo -moduleversion 3.1.0.3"])!;
 
         var reference = Assert.Single(modules)!;
         Assert.Equal("Foo", (string?)reference.GetType().GetProperty("Name")!.GetValue(reference));
-        Assert.Equal(new Version("3.1.0"), (Version?)reference.GetType().GetProperty("Version")!.GetValue(reference));
+        Assert.Equal(new Version("3.1.0.3"), (Version?)reference.GetType().GetProperty("Version")!.GetValue(reference));
     }
 
     #endregion
