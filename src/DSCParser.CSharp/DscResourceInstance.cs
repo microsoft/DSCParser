@@ -98,5 +98,17 @@ namespace DSCParser.CSharp
         /// Gets or sets an optional schema definition
         /// </summary>
         public string? Schema { get; set; }
+
+        /// <summary>
+        /// Gets or sets whether to parse against keywords already registered with
+        /// DscKeywordRegistry.RegisterFromSchemaCache instead of resolving the configuration's
+        /// modules.
+        /// </summary>
+        /// <remarks>
+        /// Set this in a host that has no PowerShell modules on disk and no usable runspace. The
+        /// configuration's Import-DscResource statements are then ignored rather than honoured, so
+        /// what the caller registered is the complete set of resources the parse can resolve.
+        /// </remarks>
+        public bool UseRegisteredKeywords { get; set; } = false;
     }
 }

@@ -1,4 +1,4 @@
-<Project>
+﻿<Project>
 
   <PropertyGroup>
     <LangVersion>latest</LangVersion>
@@ -7,6 +7,17 @@
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest</AnalysisLevel>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <Authors>Microsoft365DSC Team</Authors>
+    <Company>Microsoft365DSC</Company>
+    <Copyright>Copyright (c) Microsoft Corporation. All rights reserved.</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/Microsoft365DSC/DSCParser</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Version>3.1.0</Version>
   </PropertyGroup>
 
 </Project>

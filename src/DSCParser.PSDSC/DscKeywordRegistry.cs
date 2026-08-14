@@ -25,6 +25,11 @@ namespace DSCParser.PSDSC
 
         private static HashSet<string> ImportedModules => t_importedModules ??= new(StringComparer.OrdinalIgnoreCase);
 
+        private static readonly Dictionary<string, DynamicKeyword> SchemaCacheKeywords =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly object SchemaCacheLock = new object();
+
         [ThreadStatic]
         private static bool t_defaultKeywordsLoaded;
 
@@ -254,6 +259,81 @@ namespace DSCParser.PSDSC
         public static void ClearKeywordTable()
         {
             DscClassCacheReflection.ResetDynamicKeywords();
+        }
+
+        /// <summary>
+        /// Registers the resources described by a serialized DSC schema cache.
+        /// </summary>
+        /// <param name="keywords">
+        /// The entries of the cache's keywords array, each a map of the shape
+        /// ConvertTo-DscKeywordSchemaObject produces.
+        /// </param>
+        /// <returns>The number of keywords now registered from schema caches.</returns>
+        /// <remarks>
+        /// This is the only registration path that reaches neither the file system nor a runspace,
+        /// which is what lets a plain .NET host parse a configuration for a module it does not have
+        /// installed.
+        /// </remarks>
+        public static int RegisterFromSchemaCache(IEnumerable<object> keywords)
+        {
+            if (keywords is null)
+            {
+                throw new ArgumentNullException(nameof(keywords));
+            }
+
+            lock (SchemaCacheLock)
+            {
+                foreach (object entry in keywords)
+                {
+                    DynamicKeyword keyword = DscSchemaCacheKeywords.Build(entry);
+                    SchemaCacheKeywords[keyword.Keyword] = keyword;
+                }
+
+                return SchemaCacheKeywords.Count;
+            }
+        }
+
+        /// <summary>
+        /// Fills the engine's DynamicKeyword table with the keywords registered from schema caches.
+        /// Pair with <see cref="ClearKeywordTable"/> once parsing is done.
+        /// </summary>
+        public static void MaterializeSchemaCacheKeywords()
+        {
+            lock (SchemaCacheLock)
+            {
+                foreach (DynamicKeyword keyword in SchemaCacheKeywords.Values)
+                {
+                    if (!DynamicKeyword.ContainsKeyword(keyword.Keyword))
+                    {
+                        DynamicKeyword.AddKeyword(keyword);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Whether any schema cache has been registered.
+        /// </summary>
+        public static bool HasSchemaCacheKeywords
+        {
+            get
+            {
+                lock (SchemaCacheLock)
+                {
+                    return SchemaCacheKeywords.Count > 0;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Drops every keyword registered from a schema cache.
+        /// </summary>
+        public static void ResetSchemaCache()
+        {
+            lock (SchemaCacheLock)
+            {
+                SchemaCacheKeywords.Clear();
+            }
         }
 
         private static string GetModuleKey(string moduleName, Version? version)

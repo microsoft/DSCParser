@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Management.Automation.Language;
 using DSCParser.CSharp;
 using Xunit;
@@ -30,6 +30,29 @@ public class DscParserConvertFromDscObjectBranchTests
 
         Assert.DoesNotContain("Ensure", rendered, StringComparison.Ordinal);
         Assert.Contains("Path", rendered, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConvertFromDscObject_WithCapturedComments_ShouldRenderAsThoughTheyWereNotThere()
+    {
+        Hashtable Entry() => new()
+        {
+            ["ResourceName"] = "R",
+            ["ResourceInstanceName"] = "I",
+            ["Ensure"] = "Present",
+        };
+
+        Hashtable annotated = Entry();
+
+        // Longer than every real key, so a captured comment left in the set would both be written
+        // out as an assignment and widen the column the values align on.
+        annotated["_metadata_Ensure"] = "### L1|Keep this on.";
+
+        string rendered = Render(annotated);
+
+        Assert.DoesNotContain("_metadata_", rendered, StringComparison.Ordinal);
+        Assert.Equal(Render(Entry()), rendered);
+        AssertReparses(rendered);
     }
 
     [Fact]
