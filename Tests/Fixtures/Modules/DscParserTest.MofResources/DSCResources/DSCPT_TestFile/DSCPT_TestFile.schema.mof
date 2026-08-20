@@ -1,0 +1,10 @@
+[ClassVersion("1.0.0.0"), FriendlyName("DscParserTestFile")]
+class DSCPT_TestFile : OMI_BaseResource
+{
+    [Key, Description("Location of the file.")] String Path;
+    [Write, Description("Content of the file.")] String Contents;
+    [Write, Description("Whether the file should exist."), ValueMap{"Present","Absent"}, Values{"Present","Absent"}] String Ensure;
+    [Write, Description("Overwrite an existing file.")] Boolean Force;
+    [Write, Description("Number of write attempts.")] UInt32 Retries;
+    [Write, Description("Labels attached to the file.")] String Tags[];
+};

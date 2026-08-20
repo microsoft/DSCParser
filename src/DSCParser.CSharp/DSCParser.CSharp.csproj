@@ -4,6 +4,8 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <AssemblyName>DSCParser.CSharp</AssemblyName>
     <RootNamespace>DSCParser.CSharp</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <Description>Parses DSC configurations into objects and back, without compiling them.</Description>
   </PropertyGroup>
 
   <ItemGroup>

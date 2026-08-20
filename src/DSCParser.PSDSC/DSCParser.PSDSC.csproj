@@ -4,6 +4,8 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <AssemblyName>DSCParser.PSDSC</AssemblyName>
     <RootNamespace>DSCParser.PSDSC</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <Description>DSC resource discovery and keyword registration for DSCParser.</Description>
   </PropertyGroup>
 
   <ItemGroup>

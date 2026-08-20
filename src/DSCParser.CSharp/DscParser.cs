@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -35,6 +35,8 @@ namespace DSCParser.CSharp
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Multiline | RegexOptions.Compiled);
 
         private const string ImportDscResourcePlaceholder = "DscParserImportDscResource";
+
+        private const string MetadataPrefix = "_metadata_";
 
         // Matches a string that is syntactically nothing but a variable reference,
         // optionally scoped and with member access: $name, $scope:name, $config.Credential.
@@ -126,6 +128,11 @@ namespace DSCParser.CSharp
             string dscContent = string.IsNullOrEmpty(content) ? File.ReadAllText(path!) : content;
             string errorPrefix = string.IsNullOrEmpty(path) ? string.Empty : $"{path} - ";
 
+            if (options.UseRegisteredKeywords)
+            {
+                return ConvertUsingRegisteredKeywords(dscContent, errorPrefix, options);
+            }
+
             HashSet<string> referencedModules = new(StringComparer.OrdinalIgnoreCase);
             foreach (DscResourceInfo resource in dscResourcesConverted)
             {
@@ -211,6 +218,11 @@ namespace DSCParser.CSharp
                 int longestParameter = 0;
                 foreach (string key in entry.Keys)
                 {
+                    if (key.StartsWith(MetadataPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
                     sortedKeys.Add(key);
                     if (key.Length > longestParameter)
                     {
@@ -463,6 +475,133 @@ namespace DSCParser.CSharp
             public Version? Version { get; } = version;
         }
 
+        /// <summary>
+        /// Converts a configuration against the keywords the caller registered from a schema cache.
+        /// </summary>
+        /// <remarks>
+        /// The Node body is reparsed on its own because the engine empties the DynamicKeyword table
+        /// when it enters a Configuration block, which would drop the registered keywords before any
+        /// resource inside is reached.
+        /// </remarks>
+        private static List<DscResourceInstance> ConvertUsingRegisteredKeywords(
+            string dscContent, string errorPrefix, DscParseOptions options)
+        {
+            if (!DscKeywordRegistry.HasSchemaCacheKeywords)
+            {
+                throw new InvalidOperationException(
+                    "No keywords are registered. Call DscKeywordRegistry.RegisterFromSchemaCache before parsing with UseRegisteredKeywords.");
+            }
+
+            ScriptBlockAst outerAst = Parser.ParseInput(
+                RemoveImportDscResourceStatements(dscContent), out Token[] _, out ParseError[] _);
+
+            // Without a Node statement the whole content is the fragment, so a configuration
+            // fragment holding nothing but resource blocks still converts.
+            string nodeBody = FindNodeBody(outerAst) ?? RemoveImportDscResourceStatements(dscContent);
+
+            ScriptBlockAst nodeAst;
+            Token[] tokens;
+            ParseError[] parseErrors;
+            try
+            {
+                DscKeywordRegistry.MaterializeSchemaCacheKeywords();
+                nodeAst = Parser.ParseInput(nodeBody, out tokens, out parseErrors);
+            }
+            finally
+            {
+                DscKeywordRegistry.ClearKeywordTable();
+            }
+
+            foreach (ParseError error in parseErrors)
+            {
+                if (IsRecoverableParseError(error))
+                {
+                    ReportWarning($"{errorPrefix}{DescribeParseError(error)}");
+                }
+                else
+                {
+                    throw new InvalidOperationException($"{errorPrefix}Error parsing configuration: {error.Message}");
+                }
+            }
+
+            List<DscResourceInstance> result = ReadResourceInstances(
+                nodeAst.EndBlock?.Statements ?? new ReadOnlyCollection<StatementAst>([]), options);
+
+            return options.IncludeComments ? UpdateWithMetadata(tokens, result) : result;
+        }
+
+        /// <summary>
+        /// Returns the statements of the configuration's Node block as parsable text, or null when
+        /// there is no Node statement.
+        /// </summary>
+        private static string? FindNodeBody(Ast ast)
+        {
+            if (ast.Find(
+                    node => node is DynamicKeywordStatementAst { CommandElements.Count: 3 } keyword
+                            && IsBareWord(keyword.CommandElements[0], "Node")
+                            && keyword.CommandElements[2] is ScriptBlockExpressionAst,
+                    searchNestedScriptBlocks: true) is DynamicKeywordStatementAst dynamicNode)
+            {
+                return Unbrace((ScriptBlockExpressionAst)dynamicNode.CommandElements[2]);
+            }
+
+            // Outside a Configuration block, Node is not a keyword and its body may be a statement of
+            // its own rather than an argument, depending on where the opening brace sits.
+            foreach (Ast block in ast.FindAll(node => node is NamedBlockAst or StatementBlockAst, true))
+            {
+                ReadOnlyCollection<StatementAst> statements = block is NamedBlockAst named
+                    ? named.Statements
+                    : ((StatementBlockAst)block).Statements;
+
+                for (int index = 0; index < statements.Count; index++)
+                {
+                    if (statements[index] is not PipelineAst pipeline ||
+                        pipeline.PipelineElements.Count != 1 ||
+                        pipeline.PipelineElements[0] is not CommandAst command ||
+                        command.CommandElements.Count is not (2 or 3) ||
+                        !IsBareWord(command.CommandElements[0], "Node"))
+                    {
+                        continue;
+                    }
+
+                    if (command.CommandElements.Count == 3 &&
+                        command.CommandElements[2] is ScriptBlockExpressionAst inline)
+                    {
+                        return Unbrace(inline);
+                    }
+
+                    if (index + 1 < statements.Count &&
+                        statements[index + 1] is PipelineAst next &&
+                        next.PipelineElements.Count == 1 &&
+                        next.PipelineElements[0] is CommandExpressionAst { Expression: ScriptBlockExpressionAst detached })
+                    {
+                        return Unbrace(detached);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// The contents of a scriptblock, which parse as a script where the braced form would parse
+        /// as one expression.
+        /// </summary>
+        private static string Unbrace(ScriptBlockExpressionAst body)
+        {
+            string text = body.Extent.Text.Trim();
+
+            return text.Length >= 2 && text[0] == '{' && text[text.Length - 1] == '}'
+                ? text.Substring(1, text.Length - 2)
+                : text;
+        }
+
+        private static bool IsBareWord(CommandElementAst element, string value)
+        {
+            return element is StringConstantExpressionAst { StringConstantType: StringConstantType.BareWord } constant
+                   && constant.Value.Equals(value, StringComparison.OrdinalIgnoreCase);
+        }
+
         private static List<DscResourceInstance> GetResourceInstances(ConfigurationDefinitionAst configAst, DscParseOptions? options = null)
         {
             // Try to find Node statement first
@@ -475,13 +614,18 @@ namespace DSCParser.CSharp
                         constant.Value.Equals("Node", StringComparison.OrdinalIgnoreCase))
                 ?? throw new InvalidOperationException("No Node statement found in the DSC configuration");
 
-            List<DscResourceInstance> result = [];
-
             ScriptBlockExpressionAst nodeBody = dynamicNodeStatement.CommandElements[2] as ScriptBlockExpressionAst
                 ?? throw new InvalidOperationException("Failed to parse Node body in DSC configuration.");
             NamedBlockAst? scriptBlockBody = nodeBody.ScriptBlock.Find(ast => ast is NamedBlockAst, false) as NamedBlockAst
                 ?? throw new InvalidOperationException("Failed to parse Node body statements in DSC configuration.");
-            ReadOnlyCollection<StatementAst> resourceInstancesInNode = scriptBlockBody.Statements;
+
+            return ReadResourceInstances(scriptBlockBody.Statements, options);
+        }
+
+        private static List<DscResourceInstance> ReadResourceInstances(
+            ReadOnlyCollection<StatementAst> resourceInstancesInNode, DscParseOptions? options = null)
+        {
+            List<DscResourceInstance> result = [];
 
             for (int index = 0; index < resourceInstancesInNode.Count; index++)
             {

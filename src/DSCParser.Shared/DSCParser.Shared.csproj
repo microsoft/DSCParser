@@ -4,6 +4,8 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <AssemblyName>DSCParser.Shared</AssemblyName>
     <RootNamespace>DSCParser.Shared</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <Description>DSC resource metadata types shared by the DSCParser assemblies.</Description>
   </PropertyGroup>
 
   <ItemGroup>

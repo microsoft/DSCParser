@@ -269,4 +269,96 @@ public class DscResourceInfoTests
     }
 
     #endregion
+
+    #region PropertiesAsResourceInfo full IList surface
+
+    [Fact]
+    public void PropertiesAsResourceInfo_IndexerSet_ShouldReplaceElementInSharedStore()
+    {
+        var info = new DscResourceInfo();
+        info.AddProperty(new DscResourcePropertyInfo { Name = "First" });
+        var replacement = new DscResourcePropertyInfo { Name = "Second" };
+
+        info.PropertiesAsResourceInfo[0] = replacement;
+
+        Assert.Same(replacement, info.Properties[0]);
+        Assert.Equal("Second", info.PropertiesAsResourceInfo[0].Name);
+    }
+
+    [Fact]
+    public void PropertiesAsResourceInfo_InsertAndRemoveAt_ShouldMutateSharedStore()
+    {
+        var info = new DscResourceInfo();
+        info.AddProperty(new DscResourcePropertyInfo { Name = "A" });
+        info.AddProperty(new DscResourcePropertyInfo { Name = "B" });
+        var inserted = new DscResourcePropertyInfo { Name = "Mid" };
+
+        info.PropertiesAsResourceInfo.Insert(1, inserted);
+        Assert.Equal(["A", "Mid", "B"], info.PropertiesAsResourceInfo.Select(p => p.Name));
+
+        info.PropertiesAsResourceInfo.RemoveAt(1);
+        Assert.Equal(["A", "B"], info.PropertiesAsResourceInfo.Select(p => p.Name));
+    }
+
+    [Fact]
+    public void PropertiesAsResourceInfo_Remove_ShouldReturnWhetherItemWasPresent()
+    {
+        var info = new DscResourceInfo();
+        var present = new DscResourcePropertyInfo { Name = "A" };
+        info.AddProperty(present);
+
+        Assert.True(info.PropertiesAsResourceInfo.Remove(present));
+        Assert.False(info.PropertiesAsResourceInfo.Remove(new DscResourcePropertyInfo()));
+        Assert.Empty(info.Properties);
+    }
+
+    [Fact]
+    public void PropertiesAsResourceInfo_Clear_ShouldEmptySharedStore()
+    {
+        var info = new DscResourceInfo();
+        info.AddProperty(new DscResourcePropertyInfo { Name = "A" });
+        info.AddProperty(new DscResourcePropertyInfo { Name = "B" });
+
+        info.PropertiesAsResourceInfo.Clear();
+
+        Assert.Empty(info.Properties);
+    }
+
+    [Fact]
+    public void PropertiesAsResourceInfo_ContainsAndIndexOf_ShouldSearchSharedStore()
+    {
+        var info = new DscResourceInfo();
+        var target = new DscResourcePropertyInfo { Name = "B" };
+        info.AddProperty(new DscResourcePropertyInfo { Name = "A" });
+        info.AddProperty(target);
+        info.AddProperty(new DscResourcePropertyInfo { Name = "C" });
+
+        Assert.True(info.PropertiesAsResourceInfo.Contains(target));
+        Assert.Equal(1, info.PropertiesAsResourceInfo.IndexOf(target));
+        Assert.False(info.PropertiesAsResourceInfo.Contains(new DscResourcePropertyInfo()));
+    }
+
+    [Fact]
+    public void PropertiesAsResourceInfo_IsReadOnly_ShouldBeFalse()
+    {
+        Assert.False(new DscResourceInfo().PropertiesAsResourceInfo.IsReadOnly);
+    }
+
+    [Fact]
+    public void PropertiesAsResourceInfo_CopyTo_ShouldCopyIntoArrayAtIndex()
+    {
+        var info = new DscResourceInfo();
+        info.AddProperty(new DscResourcePropertyInfo { Name = "A" });
+        info.AddProperty(new DscResourcePropertyInfo { Name = "B" });
+
+        var array = new DscResourcePropertyInfo[4];
+        info.PropertiesAsResourceInfo.CopyTo(array, 1);
+
+        Assert.Null(array[0]);
+        Assert.Equal("A", array[1].Name);
+        Assert.Equal("B", array[2].Name);
+        Assert.Null(array[3]);
+    }
+
+    #endregion
 }
