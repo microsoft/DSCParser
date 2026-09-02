@@ -10,24 +10,31 @@ namespace DSCParser.CSharp
 {
     internal sealed class DscResourceInfoMapper
     {
-        public static DscResourceInfo MapPSObjectToResourceInfo(dynamic psObject)
+        public static DscResourceInfo MapPSObjectToResourceInfo(object psObject)
         {
             if (psObject is null) throw new ArgumentNullException(nameof(psObject));
 
+            if (Unwrap(psObject) is DscResourceInfo typed)
+            {
+                return typed;
+            }
+
+            PSObject source = PSObject.AsPSObject(psObject);
+
             DscResourceInfo resourceInfo = new()
             {
-                ResourceType = AsString(psObject.ResourceType),
-                CompanyName = AsString(psObject.CompanyName),
-                FriendlyName = AsString(psObject.FriendlyName),
-                Module = Unwrap(psObject.Module) as PSModuleInfo,
-                Path = AsString(psObject.Path),
-                ParentPath = AsString(psObject.ParentPath),
-                ImplementedAs = (ImplementedAsType)Enum.Parse(typeof(ImplementedAsType), AsString(psObject.ImplementedAs)),
-                Name = AsString(psObject.Name)
+                ResourceType = AsString(Member(source, "ResourceType")),
+                CompanyName = AsString(Member(source, "CompanyName")),
+                FriendlyName = AsString(Member(source, "FriendlyName")),
+                Module = Unwrap(Member(source, "Module")) as PSModuleInfo,
+                Path = AsString(Member(source, "Path")),
+                ParentPath = AsString(Member(source, "ParentPath")),
+                ImplementedAs = (ImplementedAsType)Enum.Parse(typeof(ImplementedAsType), AsString(Member(source, "ImplementedAs"))),
+                Name = AsString(Member(source, "Name"))
             };
 
             List<DscResourcePropertyInfo> props = [];
-            foreach (object obj in AsEnumerable(psObject.Properties))
+            foreach (object obj in AsEnumerable(Member(source, "Properties")))
             {
                 props.Add(MapToDscResourcePropertyInfo(obj));
             }
@@ -36,22 +43,34 @@ namespace DSCParser.CSharp
             return resourceInfo;
         }
 
-        public static DscResourcePropertyInfo MapToDscResourcePropertyInfo(dynamic psObjectPropery)
+        public static DscResourcePropertyInfo MapToDscResourcePropertyInfo(object psObjectPropery)
         {
+            if (Unwrap(psObjectPropery) is DscResourcePropertyInfo typed)
+            {
+                return typed;
+            }
+
+            PSObject source = PSObject.AsPSObject(psObjectPropery);
+
             DscResourcePropertyInfo propertyInfo = new()
             {
-                Name = AsString(psObjectPropery.Name),
-                PropertyType = AsString(psObjectPropery.PropertyType),
-                IsMandatory = LanguagePrimitives.IsTrue(Unwrap(psObjectPropery.IsMandatory))
+                Name = AsString(Member(source, "Name")),
+                PropertyType = AsString(Member(source, "PropertyType")),
+                IsMandatory = LanguagePrimitives.IsTrue(Unwrap(Member(source, "IsMandatory")))
             };
 
             List<string> newValues = [];
-            foreach (object value in AsEnumerable(psObjectPropery.Values))
+            foreach (object value in AsEnumerable(Member(source, "Values")))
             {
                 newValues.Add(AsString(value) ?? string.Empty);
             }
             propertyInfo.Values = newValues;
             return propertyInfo;
+        }
+
+        private static object? Member(PSObject source, string name)
+        {
+            return source.Properties[name]?.Value;
         }
 
         private static object? Unwrap(object? value)

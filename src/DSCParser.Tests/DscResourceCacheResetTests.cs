@@ -1,4 +1,5 @@
 using System.Management.Automation.Language;
+using System.Reflection;
 using DSCParser.PSDSC;
 using Xunit;
 
@@ -206,12 +207,13 @@ public class DscResourceCacheResetTests
 
             // Windows PowerShell reinitializes the class cache to the default set during every
             // configuration parse: the sentinel class survives but all module entries vanish.
-            // Simulate that by claiming more keywords were imported than the cache now holds.
+            // Simulate that by claiming more classes were imported than the cache now holds.
             var expectedCountField = typeof(DscKeywordRegistry).GetField(
-                "t_expectedCachedKeywordCount",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                "t_expectedCachedClassCount",
+                BindingFlags.NonPublic | BindingFlags.Static);
             Assert.NotNull(expectedCountField);
-            expectedCountField!.SetValue(null, KeywordCount() + 1);
+            int currentClassCount = DscClassCacheReflection.GetCachedClassCount();
+            expectedCountField!.SetValue(null, (currentClassCount >= 0 ? currentClassCount : KeywordCount()) + 1);
 
             Assert.True(DscKeywordRegistry.HandleExternalCacheReset());
         }
@@ -310,7 +312,7 @@ public class DscResourceCacheResetTests
             // Forge the bookkeeping: pretend FakeModule was imported on this thread.
             var field = typeof(DscKeywordRegistry).GetField(
                 "t_importedModules",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                BindingFlags.NonPublic | BindingFlags.Static);
             Assert.NotNull(field);
             var imported = Assert.IsType<HashSet<string>>(field!.GetValue(null));
             Assert.True(imported.Add("FakeModule"));

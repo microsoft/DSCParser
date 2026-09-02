@@ -1,5 +1,6 @@
 ﻿using Microsoft.PowerShell.Commands;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Management.Automation;
@@ -65,7 +66,7 @@ namespace DSCParser.PSDSC
                     {
                         _moduleString = ms.Name;
                     }
-                    else if (Module is System.Collections.Hashtable ht)
+                    else if (Module is Hashtable ht)
                     {
                         if (ht.ContainsKey("ModuleName"))
                         {
