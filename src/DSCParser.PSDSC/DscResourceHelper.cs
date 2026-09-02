@@ -1,5 +1,5 @@
-﻿using Microsoft.PowerShell.DesiredStateConfiguration.V2;
-using System;
+﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -59,6 +59,10 @@ namespace DSCParser.PSDSC
             { "MSFT_KeyValuePair[]", "[HashTable]" }
         };
 
+        private static readonly ConcurrentDictionary<string, string> TypeNameCache = new(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly ConcurrentDictionary<string, WildcardPattern> PatternCache = new(StringComparer.Ordinal);
+
         /// <summary>
         /// Checks whether a resource is hidden and should not be shown to users
         /// </summary>
@@ -77,7 +81,7 @@ namespace DSCParser.PSDSC
 
             foreach (var pattern in patterns)
             {
-                if (WildcardPattern.Get(pattern, WildcardOptions.IgnoreCase | WildcardOptions.CultureInvariant).IsMatch(name))
+                if (PatternCache.GetOrAdd(pattern, p => WildcardPattern.Get(p, WildcardOptions.IgnoreCase | WildcardOptions.CultureInvariant)).IsMatch(name))
                 {
                     return true;
                 }
@@ -325,11 +329,14 @@ namespace DSCParser.PSDSC
                 return mappedType;
             }
 
-            var type = LanguagePrimitives.ConvertTypeNameToPSTypeName(typeConstraint);
+            return TypeNameCache.GetOrAdd(typeConstraint, static constraint =>
+            {
+                var type = LanguagePrimitives.ConvertTypeNameToPSTypeName(constraint);
 
-            return string.IsNullOrEmpty(type)
-                ? $"[{typeConstraint}]"
-                : type;
+                return string.IsNullOrEmpty(type)
+                    ? $"[{constraint}]"
+                    : type;
+            });
         }
 
         /// <summary>

@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Management.Automation;
 using System.Management.Automation.Language;
 using DSCParser.CSharp;
 using DSCParser.PSDSC;
@@ -162,7 +163,7 @@ public class DscParserSchemaCacheKeywordTests : IDisposable
     public void RegisterFromSchemaCache_WithPSObjectEntries_ShouldRegisterKeywords()
     {
         List<object> entries = [.. SchemaCacheEntries().Select(entry =>
-            (object)System.Management.Automation.PSObject.AsPSObject(entry))];
+            (object)PSObject.AsPSObject(entry))];
 
         Assert.Equal(2, DscKeywordRegistry.RegisterFromSchemaCache(entries));
         Assert.True(DscKeywordRegistry.HasSchemaCacheKeywords);

@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using System.Management.Automation.Language;
+using System.Text.RegularExpressions;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Engines;
 using DSCParser.CSharp;
@@ -30,11 +31,11 @@ public class ConvertToDscObjectBenchmarks
         _content = File.ReadAllText(configPath);
         // ConvertToDscObject strips -ModuleVersion before parsing. Without the same treatment the
         // bare parse benchmark measures a fast failure to resolve the pinned version instead.
-        _contentWithoutModuleVersion = System.Text.RegularExpressions.Regex.Replace(
+        _contentWithoutModuleVersion = Regex.Replace(
             _content,
             @"(import-dscresource\b[^\n]*?)\s+-moduleversion\s+(?:""[^""]*""|'[^']*'|\S+)([^\n]*)",
             "$1$2",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            RegexOptions.IgnoreCase);
 
         _options = new DscParseOptions { IncludeComments = false, IncludeCIMInstanceInfo = true };
         _resources = [.. DscResourceService.GetDscResources().Cast<object>()];

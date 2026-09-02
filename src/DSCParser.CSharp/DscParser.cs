@@ -21,11 +21,6 @@ namespace DSCParser.CSharp
     {
         private static readonly Dictionary<string, DscResourceInfo> _dscResources = new(StringComparer.OrdinalIgnoreCase);
 
-        // Module name -> whether more than one version is installed. Enumerating PSModulePath is
-        // expensive and it does not change within a process, so the verdict is reused across the many
-        // ConvertToDscObject calls a single export produces. ClearCaches resets it.
-        private static readonly Dictionary<string, bool> _moduleHasMultipleVersions = new(StringComparer.OrdinalIgnoreCase);
-
         private static readonly Regex ImportDscResourceVersionRegex = new(
             @"(import-dscresource\b[^\n]*?)\s+-moduleversion\s+(?:""[^""]*""|'[^']*'|\S+)([^\n]*)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -58,7 +53,6 @@ namespace DSCParser.CSharp
         public static void ClearCaches()
         {
             _dscResources.Clear();
-            _moduleHasMultipleVersions.Clear();
             DscKeywordRegistry.Reset();
         }
 
@@ -178,9 +172,6 @@ namespace DSCParser.CSharp
                 throw new InvalidOperationException("No Configuration definition found in the DSC content");
             }
 
-            // Initialize DSC resources
-            InitializeDscResources(modulesToLoad, dscResourcesConverted);
-
             // Get resource instances
             List<DscResourceInstance> resourceInstances = GetResourceInstances(configAst, options);
 
@@ -192,6 +183,22 @@ namespace DSCParser.CSharp
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Names of the modules the configuration's Import-DscResource statements reference.
+        /// </summary>
+        public static string[] GetReferencedModuleNames(string content)
+        {
+            if (string.IsNullOrEmpty(content))
+            {
+                return [];
+            }
+
+            return GetModulesToLoad(content)
+                .Select(reference => reference.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
         }
 
         /// <summary>
@@ -208,11 +215,11 @@ namespace DSCParser.CSharp
         /// Renders resources into <paramref name="result"/>. Nested hashtables and arrays recurse into
         /// the same builder, so no intermediate strings are produced per nesting level.
         /// </summary>
-        private static void AppendDscObjects(StringBuilder result, IEnumerable<Hashtable> dscResources, int childLevel)
+        private static void AppendDscObjects(StringBuilder result, IEnumerable<IDictionary> dscResources, int childLevel)
         {
             string childSpacer = new(' ', childLevel * 4);
 
-            foreach (Hashtable entry in dscResources)
+            foreach (IDictionary entry in dscResources)
             {
                 List<string> sortedKeys = [];
                 int longestParameter = 0;
@@ -231,11 +238,11 @@ namespace DSCParser.CSharp
                 }
                 sortedKeys.Sort(StringComparer.Ordinal);
 
-                if (entry.ContainsKey("CIMInstance"))
+                if (entry.Contains("CIMInstance"))
                 {
                     _ = result.Append(childSpacer).Append(entry["CIMInstance"]).AppendLine("{");
                 }
-                else if (entry.ContainsKey("ResourceName") && entry.ContainsKey("ResourceInstanceName"))
+                else if (entry.Contains("ResourceName") && entry.Contains("ResourceInstanceName"))
                 {
                     _ = result.Append(childSpacer).Append(entry["ResourceName"]).Append(" \"").Append(entry["ResourceInstanceName"]).AppendLine("\"");
                     _ = result.Append(childSpacer).AppendLine("{");
@@ -253,8 +260,7 @@ namespace DSCParser.CSharp
                         continue;
                     }
 
-                    string additionalSpaces = new(' ', longestParameter - property.Length + 1);
-                    AppendProperty(result, property, entry[property], additionalSpaces, childSpacer, childLevel);
+                    AppendProperty(result, property, entry[property], longestParameter - property.Length + 1, childSpacer, childLevel);
                 }
 
                 _ = result.Append(childSpacer).Append('}').Append(Environment.NewLine);
@@ -289,54 +295,26 @@ namespace DSCParser.CSharp
         /// </summary>
         private static List<string> GetSingleVersionModules(HashSet<string> moduleNames)
         {
-            List<string> unresolved = [];
-            foreach (string moduleName in moduleNames)
+            List<string> singleVersionModules = [];
+            if (moduleNames.Count == 0)
             {
-                if (!_moduleHasMultipleVersions.ContainsKey(moduleName))
-                {
-                    unresolved.Add(moduleName);
-                }
+                return singleVersionModules;
             }
 
-            if (unresolved.Count > 0)
+            PSModuleInfo[] installed = PowerShellInvoker.ListAvailableModules(moduleNames);
+
+            foreach (string moduleName in moduleNames)
             {
-                Dictionary<string, HashSet<string>> versionsByModule = new(StringComparer.OrdinalIgnoreCase);
-
-                using (PowerShell ps = PowerShell.Create())
+                HashSet<string> versions = new(StringComparer.OrdinalIgnoreCase);
+                foreach (PSModuleInfo module in installed)
                 {
-                    _ = ps.AddCommand("Get-Module")
-                        .AddParameter("Name", unresolved.ToArray())
-                        .AddParameter("ListAvailable");
-
-                    foreach (PSObject module in ps.Invoke())
+                    if (moduleName.Equals(module.Name, StringComparison.OrdinalIgnoreCase) && module.Version is not null)
                     {
-                        string? name = module.Members["Name"]?.Value?.ToString();
-                        string? version = module.Members["Version"]?.Value?.ToString();
-                        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(version))
-                        {
-                            continue;
-                        }
-
-                        if (!versionsByModule.TryGetValue(name!, out HashSet<string>? versions))
-                        {
-                            versions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                            versionsByModule[name!] = versions;
-                        }
-                        _ = versions.Add(version!);
+                        _ = versions.Add(module.Version.ToString());
                     }
                 }
 
-                foreach (string moduleName in unresolved)
-                {
-                    _moduleHasMultipleVersions[moduleName] =
-                        versionsByModule.TryGetValue(moduleName, out HashSet<string>? found) && found.Count > 1;
-                }
-            }
-
-            List<string> singleVersionModules = [];
-            foreach (string moduleName in moduleNames)
-            {
-                if (!_moduleHasMultipleVersions[moduleName])
+                if (versions.Count <= 1)
                 {
                     singleVersionModules.Add(moduleName);
                 }
@@ -437,33 +415,6 @@ namespace DSCParser.CSharp
                 else
                 {
                     throw new InvalidOperationException($"{errorPrefix}Error parsing configuration: {error.Message}");
-                }
-            }
-        }
-
-        private static void InitializeDscResources(List<ModuleReference> modulesToLoad, List<DscResourceInfo> allDscResources)
-        {
-            if (modulesToLoad.Count == 0)
-            {
-                return;
-            }
-
-            foreach (DscResourceInfo resource in allDscResources)
-            {
-                PSModuleInfo? module = resource.Module;
-                if (module is null || string.IsNullOrEmpty(resource.Name) || _dscResources.ContainsKey(resource.Name!))
-                {
-                    continue;
-                }
-
-                foreach (ModuleReference reference in modulesToLoad)
-                {
-                    if (module.Name.Equals(reference.Name, StringComparison.OrdinalIgnoreCase) &&
-                        (reference.Version is null || reference.Version.Equals(module.Version)))
-                    {
-                        _dscResources.Add(resource.Name!, resource);
-                        break;
-                    }
                 }
             }
         }
@@ -669,23 +620,14 @@ namespace DSCParser.CSharp
 
                 foreach (Tuple<ExpressionAst, StatementAst> keyValuePair in ((HashtableAst)resource.CommandElements[2]).KeyValuePairs)
                 {
-                    string key = keyValuePair.Item1.ToString();
-                    object? value = null;
-
                     // Process every kind of property except single CIM instance assignments like:
                     // PsDscRunAsCredential = MSFT_Credential{
                     //    UserName = $ConfigurationData.NonNodeData.AdminUserName
                     //    Password = $ConfigurationData.NonNodeData.AdminPassword
                     // };
-                    if (keyValuePair.Item2 is PipelineAst pip)
-                    {
-                        value = ProcessPipelineAst(pip, options?.IncludeCIMInstanceInfo ?? true);
-                    }
-                    else if (keyValuePair.Item2 is DynamicKeywordStatementAst dynamicStatement)
-                    {
-                        value = ProcessDynamicKeywordStatementAst(dynamicStatement, options?.IncludeCIMInstanceInfo ?? true);
-                    }
-                    currentResourceProperties.Add(key, value!);
+                    currentResourceProperties.Add(
+                        keyValuePair.Item1.ToString(),
+                        ProcessStatementValue(keyValuePair.Item2, options?.IncludeCIMInstanceInfo ?? true));
                 }
 
                 currentResourceInfo.Properties = currentResourceProperties;
@@ -729,6 +671,16 @@ namespace DSCParser.CSharp
                    statements[index] is PipelineAst pipeline &&
                    pipeline.PipelineElements.Count == 1 &&
                    pipeline.PipelineElements[0] is CommandExpressionAst { Expression: ScriptBlockExpressionAst };
+        }
+
+        private static object? ProcessStatementValue(StatementAst statement, bool includeCimInstanceInfo)
+        {
+            return statement switch
+            {
+                PipelineAst pipeline => ProcessPipelineAst(pipeline, includeCimInstanceInfo),
+                DynamicKeywordStatementAst dynamicStatement => ProcessDynamicKeywordStatementAst(dynamicStatement, includeCimInstanceInfo),
+                _ => null
+            };
         }
 
         private static object? ProcessPipelineAst(PipelineAst pip, bool includeCimInstanceInfo)
@@ -935,18 +887,7 @@ namespace DSCParser.CSharp
 
                 foreach (Tuple<ExpressionAst, StatementAst> kvp in hashtableAst.KeyValuePairs)
                 {
-                    string key = kvp.Item1.ToString().Trim('"', '\'');
-
-                    object? value = null;
-                    if (kvp.Item2 is PipelineAst pip)
-                    {
-                        value = ProcessPipelineAst(pip, includeCimInstanceInfo);
-                    }
-                    else if (kvp.Item2 is DynamicKeywordStatementAst dynamicStatement)
-                    {
-                        value = ProcessDynamicKeywordStatementAst(dynamicStatement, includeCimInstanceInfo);
-                    }
-                    currentResult[key] = value;
+                    currentResult[kvp.Item1.ToString().Trim('"', '\'')] = ProcessStatementValue(kvp.Item2, includeCimInstanceInfo);
                 }
             }
 
@@ -971,23 +912,25 @@ namespace DSCParser.CSharp
             Hashtable result = [];
             foreach (Tuple<ExpressionAst, StatementAst> kvp in hashtableAst.KeyValuePairs)
             {
-                string key = kvp.Item1.ToString();
-                object? value = null;
-                if (kvp.Item2 is PipelineAst pip)
-                {
-                    value = ProcessPipelineAst(pip, includeCimInstanceInfo);
-                }
-                else if (kvp.Item2 is DynamicKeywordStatementAst dynamicStatement)
-                {
-                    value = ProcessDynamicKeywordStatementAst(dynamicStatement, includeCimInstanceInfo);
-                }
-                result[key] = value;
+                result[kvp.Item1.ToString()] = ProcessStatementValue(kvp.Item2, includeCimInstanceInfo);
             }
             return result;
         }
 
         private static List<DscResourceInstance> UpdateWithMetadata(Token[] tokens, List<DscResourceInstance> parsedObjects)
         {
+            Dictionary<string, List<DscResourceInstance>> objectsByResourceName = new(StringComparer.OrdinalIgnoreCase);
+            foreach (DscResourceInstance parsedObject in parsedObjects)
+            {
+                if (!objectsByResourceName.TryGetValue(parsedObject.ResourceName, out List<DscResourceInstance>? group))
+                {
+                    group = [];
+                    objectsByResourceName[parsedObject.ResourceName] = group;
+                }
+
+                group.Add(parsedObject);
+            }
+
             // Find Node token position
             int tokenPositionOfNode = 0;
             for (int i = 0; i < tokens.Length; i++)
@@ -1037,10 +980,14 @@ namespace DSCParser.CSharp
 
                 string commentAssociatedProperty = tokens[propertyIndex].Text;
 
-                foreach (DscResourceInstance parsedObject in parsedObjects)
+                if (!objectsByResourceName.TryGetValue(commentResourceType, out List<DscResourceInstance>? candidates))
                 {
-                    if (parsedObject.ResourceName.Equals(commentResourceType, StringComparison.OrdinalIgnoreCase) &&
-                        parsedObject.ResourceInstanceName.Equals(commentResourceInstanceName, StringComparison.Ordinal) &&
+                    continue;
+                }
+
+                foreach (DscResourceInstance parsedObject in candidates)
+                {
+                    if (parsedObject.ResourceInstanceName.Equals(commentResourceInstanceName, StringComparison.Ordinal) &&
                         parsedObject.Properties.ContainsKey(commentAssociatedProperty))
                     {
                         parsedObject.AddProperty($"_metadata_{commentAssociatedProperty}", tokens[i].Text);
@@ -1051,14 +998,14 @@ namespace DSCParser.CSharp
             return parsedObjects;
         }
 
-        private static void AppendProperty(StringBuilder result, string property, object? value, string additionalSpaces, string childSpacer, int childLevel)
+        private static void AppendProperty(StringBuilder result, string property, object? value, int additionalSpaces, string childSpacer, int childLevel)
         {
             switch (value)
             {
                 case string strValue:
                     AppendPropertyPrefix(result, property, additionalSpaces, childSpacer);
                     // Only a string that is entirely a variable reference is emitted bare
-                    if (BareVariableReferenceRegex.IsMatch(strValue))
+                    if (strValue.Length > 1 && strValue[0] == '$' && BareVariableReferenceRegex.IsMatch(strValue))
                     {
                         _ = result.AppendLine(strValue);
                     }
@@ -1086,7 +1033,7 @@ namespace DSCParser.CSharp
                 case IDictionary dictionary:
                     AppendPropertyPrefix(result, property, additionalSpaces, childSpacer);
                     int contentStart = result.Length;
-                    AppendDscObjects(result, [AsHashtable(dictionary)], childLevel + 1);
+                    AppendDscObjects(result, [dictionary], childLevel + 1);
                     StripIndentOfOpeningLine(result, contentStart);
                     break;
 
@@ -1105,13 +1052,20 @@ namespace DSCParser.CSharp
             }
         }
 
-        private static void AppendPropertyPrefix(StringBuilder result, string property, string additionalSpaces, string childSpacer)
+        private static void AppendPropertyPrefix(StringBuilder result, string property, int additionalSpaces, string childSpacer)
         {
-            _ = result.Append(childSpacer).Append("    ").Append(property).Append(additionalSpaces).Append("= ");
+            _ = result.Append(childSpacer).Append("    ").Append(property).Append(' ', additionalSpaces).Append("= ");
         }
+
+        private static readonly char[] QuoteEscapeCharacters = ['`', '"'];
 
         private static StringBuilder AppendQuoted(StringBuilder result, string value)
         {
+            if (value.IndexOfAny(QuoteEscapeCharacters) < 0)
+            {
+                return result.Append('"').Append(value).Append('"');
+            }
+
             _ = result.Append('"');
             foreach (char character in value)
             {
@@ -1152,8 +1106,6 @@ namespace DSCParser.CSharp
                 return;
             }
 
-            string itemIndent = new(' ', childSpacer.Length + 8);
-
             _ = result.AppendLine();
             for (int i = 0; i < items.Count; i++)
             {
@@ -1164,33 +1116,18 @@ namespace DSCParser.CSharp
 
                 if (items[i] is IDictionary nested)
                 {
-                    AppendDscObjects(result, [AsHashtable(nested)], childLevel + 2);
+                    AppendDscObjects(result, [nested], childLevel + 2);
                     result.Length -= Environment.NewLine.Length;
                 }
                 else
                 {
-                    _ = result.Append(itemIndent);
+                    _ = result.Append(' ', childSpacer.Length + 8);
                     AppendArrayItem(result, items[i]);
                 }
             }
             _ = result.AppendLine();
 
             _ = result.Append(childSpacer).AppendLine("    )");
-        }
-
-        private static Hashtable AsHashtable(IDictionary dictionary)
-        {
-            if (dictionary is Hashtable hashtable)
-            {
-                return hashtable;
-            }
-
-            Hashtable converted = new(dictionary.Count);
-            foreach (DictionaryEntry entry in dictionary)
-            {
-                converted[entry.Key] = entry.Value;
-            }
-            return converted;
         }
 
         private static void AppendArrayItem(StringBuilder result, object? item)

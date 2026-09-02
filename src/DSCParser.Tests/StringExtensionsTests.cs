@@ -1,4 +1,4 @@
-using Microsoft.PowerShell.DesiredStateConfiguration.V2;
+using DSCParser.PSDSC;
 using Xunit;
 
 namespace DSCParser.Tests;

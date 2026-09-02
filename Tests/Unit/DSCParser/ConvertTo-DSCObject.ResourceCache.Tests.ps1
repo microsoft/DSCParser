@@ -80,6 +80,40 @@ Describe 'ConvertTo-DSCObject resource cache' {
             }
         }
 
+        It 'Should discover only the modules the configuration imports and add others on demand' {
+            $classModule = Get-Module -ListAvailable -Name 'DscParserTest.ClassResources'
+            $classConfiguration = @"
+Configuration ClassBased
+{
+    Import-DscResource -ModuleName '$($classModule.Name)' -ModuleVersion '$($classModule.Version)'
+
+    Node localhost
+    {
+        DscParserTestClassApp TestInstance
+        {
+            AppName       = 'Contoso'
+            InstanceCount = 2
+        }
+    }
+}
+"@
+
+            $null = ConvertTo-DSCObject -Path $script:ValidConfigurationPath -WarningAction SilentlyContinue
+
+            InModuleScope -ModuleName DSCParser {
+                $Script:DscResourceCache.Name | Should -Contain 'DscParserTestFile'
+                $Script:DscResourceCache.Name | Should -Not -Contain 'DscParserTestClassApp'
+            }
+
+            $parsed = @(ConvertTo-DSCObject -Content $classConfiguration -WarningAction SilentlyContinue)
+            $parsed.Count | Should -Be 1
+
+            InModuleScope -ModuleName DSCParser {
+                $Script:DscResourceCache.Name | Should -Contain 'DscParserTestFile'
+                $Script:DscResourceCache.Name | Should -Contain 'DscParserTestClassApp'
+            }
+        }
+
         It 'Should keep a cache that an earlier call supplied explicitly' {
             $fileOnly = @(Get-DscResourceV2 -Module 'DscParserTest.MofResources' -Name 'DscParserTestFile')
             $null = ConvertTo-DSCObject -Path $script:ValidConfigurationPath -DscResourceInfo $fileOnly
