@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Microsoft.PowerShell.DesiredStateConfiguration.V2
+namespace DSCParser.PSDSC
 {
     internal static class StringExtensions
     {

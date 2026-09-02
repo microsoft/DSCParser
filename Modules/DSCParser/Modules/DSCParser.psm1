@@ -7,6 +7,9 @@ $Script:ModuleRoot = $PSScriptRoot
 $Script:IsPowerShellCore = $PSVersionTable.PSEdition -eq 'Core'
 $Script:AssemblyPath = Join-Path $Script:ModuleRoot "bin\DSCParser.CSharp.dll"
 $Script:AssemblyLoaded = $false
+$Script:DscResourceCache = $null
+$Script:DscResourceCacheIsExplicit = $false
+$Script:DiscoveredModules = [System.Collections.Generic.HashSet[System.String]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
 # Function to load the C# assembly using Assembly Load Context
 function Initialize-DscParserAssembly
@@ -135,13 +138,42 @@ function ConvertTo-DSCObject
 
     try
     {
-        if ($null -eq $Script:DscResourceCache -and -not $PSBoundParameters.ContainsKey('DscResourceInfo'))
-        {
-            $Script:DscResourceCache = Get-DscResourceV2
-        }
-        elseif ($PSBoundParameters.ContainsKey('DscResourceInfo'))
+        if ($PSBoundParameters.ContainsKey('DscResourceInfo'))
         {
             $Script:DscResourceCache = $DscResourceInfo
+            $Script:DscResourceCacheIsExplicit = $true
+        }
+        elseif ($null -eq $Script:DscResourceCache -or -not $Script:DscResourceCacheIsExplicit)
+        {
+            if ($null -eq $Script:DscResourceCache)
+            {
+                $Script:DiscoveredModules.Clear()
+            }
+            $Script:DscResourceCacheIsExplicit = $false
+
+            $text = if ($PSCmdlet.ParameterSetName -eq 'Path') { [System.IO.File]::ReadAllText($Path) } else { $Content }
+            $referencedModules = [DSCParser.CSharp.DscParser]::GetReferencedModuleNames($text)
+
+            if ($referencedModules.Count -eq 0)
+            {
+                if ($null -eq $Script:DscResourceCache)
+                {
+                    $Script:DscResourceCache = @(Get-DscResourceV2)
+                }
+            }
+            else
+            {
+                foreach ($moduleName in $referencedModules)
+                {
+                    if (-not $Script:DiscoveredModules.Add($moduleName))
+                    {
+                        continue
+                    }
+
+                    $discovered = @(Get-DscResourceV2 -Module $moduleName)
+                    $Script:DscResourceCache = if ($null -eq $Script:DscResourceCache) { $discovered } else { @($Script:DscResourceCache) + $discovered }
+                }
+            }
         }
 
         $options = [DSCParser.CSharp.DscParseOptions]::new()

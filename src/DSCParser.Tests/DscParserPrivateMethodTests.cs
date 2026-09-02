@@ -41,10 +41,6 @@ public class DscParserPrivateMethodTests
         typeof(DscParser).GetMethod("ReportParseErrors", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ReportParseErrors method not found");
 
-    private static readonly MethodInfo _initializeDscResources =
-        typeof(DscParser).GetMethod("InitializeDscResources", BindingFlags.NonPublic | BindingFlags.Static)
-        ?? throw new InvalidOperationException("InitializeDscResources method not found");
-
     private static readonly MethodInfo _processCommandAst =
         typeof(DscParser).GetMethod("ProcessCommandAst", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ProcessCommandAst method not found");
@@ -152,10 +148,9 @@ public class DscParserPrivateMethodTests
     [Fact]
     public void GetSingleVersionModules_WithCachedSingleVersionModule_ShouldReturnItWithoutQueryingPowerShell()
     {
-        var cache = GetModuleVersionCache();
         try
         {
-            cache["__CachedSingleVersionModule__"] = false;
+            SeedModuleCatalog("__CachedSingleVersionModule__", new Version("1.0.0.0"));
 
             var result = (List<string>)_getSingleVersionModules.Invoke(null, [new HashSet<string> { "__CachedSingleVersionModule__" }])!;
 
@@ -163,17 +158,16 @@ public class DscParserPrivateMethodTests
         }
         finally
         {
-            cache.Remove("__CachedSingleVersionModule__");
+            PowerShellInvoker.ClearModuleCatalog();
         }
     }
 
     [Fact]
     public void GetSingleVersionModules_WithCachedMultiVersionModule_ShouldExcludeIt()
     {
-        var cache = GetModuleVersionCache();
         try
         {
-            cache["__CachedMultiVersionModule__"] = true;
+            SeedModuleCatalog("__CachedMultiVersionModule__", new Version("1.0.0.0"), new Version("2.0.0.0"));
 
             var result = (List<string>)_getSingleVersionModules.Invoke(null, [new HashSet<string> { "__CachedMultiVersionModule__" }])!;
 
@@ -181,16 +175,26 @@ public class DscParserPrivateMethodTests
         }
         finally
         {
-            cache.Remove("__CachedMultiVersionModule__");
+            PowerShellInvoker.ClearModuleCatalog();
         }
     }
 
-    private static Dictionary<string, bool> GetModuleVersionCache()
+    private static void SeedModuleCatalog(string moduleName, params Version[] versions)
     {
-        var field = typeof(DscParser).GetField("_moduleHasMultipleVersions", BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new InvalidOperationException("_moduleHasMultipleVersions field not found");
+        var catalogField = typeof(PowerShellInvoker).GetField("ModuleCatalog", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("ModuleCatalog field not found");
+        var pathField = typeof(PowerShellInvoker).GetField("s_catalogModulePath", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("s_catalogModulePath field not found");
 
-        return Assert.IsType<Dictionary<string, bool>>(field.GetValue(null));
+        var catalog = Assert.IsType<Dictionary<string, PSModuleInfo[]>>(catalogField.GetValue(null));
+        pathField.SetValue(null, Environment.GetEnvironmentVariable("PSModulePath") ?? string.Empty);
+
+        catalog[moduleName] = versions.Select(version =>
+        {
+            PSModuleInfo module = PsModuleInfoFactory.CreateNameOnly(moduleName);
+            PsModuleInfoFactory.SetVersion(module, version);
+            return module;
+        }).ToArray();
     }
 
     #endregion
@@ -204,7 +208,7 @@ public class DscParserPrivateMethodTests
     [InlineData("Import-DscResource -ModuleName Foo -ModuleName Bar -ModuleVersion 2.0.0.0", "Bar", "2.0.0.0")]
     public void GetModulesToLoad_ShouldExtractNameAndVersion(string content, string expectedName, string? expectedVersion)
     {
-        var modules = (System.Collections.IList)_getModulesToLoad.Invoke(null, [content])!;
+        var modules = (IList)_getModulesToLoad.Invoke(null, [content])!;
 
         var reference = Assert.Single(modules)!;
         var name = (string?)reference.GetType().GetProperty("Name")!.GetValue(reference);
@@ -224,7 +228,7 @@ public class DscParserPrivateMethodTests
     [Fact]
     public void GetModulesToLoad_WithNoImportStatements_ShouldReturnEmpty()
     {
-        var modules = (System.Collections.IList)_getModulesToLoad.Invoke(null, ["Configuration Foo { }"])!;
+        var modules = (IList)_getModulesToLoad.Invoke(null, ["Configuration Foo { }"])!;
 
         Assert.Empty(modules);
     }
@@ -232,7 +236,7 @@ public class DscParserPrivateMethodTests
     [Fact]
     public void GetModulesToLoad_WithNonConstantModuleParameter_ShouldSkipIt()
     {
-        var modules = (System.Collections.IList)_getModulesToLoad.Invoke(null, ["Import-DscResource -ModuleName $var"])!;
+        var modules = (IList)_getModulesToLoad.Invoke(null, ["Import-DscResource -ModuleName $var"])!;
 
         Assert.Empty(modules);
     }
@@ -240,7 +244,7 @@ public class DscParserPrivateMethodTests
     [Fact]
     public void GetModulesToLoad_WithCaseInsensitiveNames_ShouldExtract()
     {
-        var modules = (System.Collections.IList)_getModulesToLoad.Invoke(null, ["import-dscresource -MODULENAME Foo -moduleversion 3.1.0.3"])!;
+        var modules = (IList)_getModulesToLoad.Invoke(null, ["import-dscresource -MODULENAME Foo -moduleversion 3.1.0.3"])!;
 
         var reference = Assert.Single(modules)!;
         Assert.Equal("Foo", (string?)reference.GetType().GetProperty("Name")!.GetValue(reference));
@@ -275,7 +279,7 @@ public class DscParserPrivateMethodTests
     {
         try
         {
-            var modules = (System.Collections.IList)_getModulesToLoad.Invoke(null, ["Import-DscResource -ModuleName __MissingModule_RegisterKeywords__"])!;
+            var modules = (IList)_getModulesToLoad.Invoke(null, ["Import-DscResource -ModuleName __MissingModule_RegisterKeywords__"])!;
 
             var warnings = CaptureWarnings(() => _registerKeywords.Invoke(null, [modules, string.Empty]));
 
@@ -292,7 +296,7 @@ public class DscParserPrivateMethodTests
     {
         try
         {
-            var modules = (System.Collections.IList)_getModulesToLoad.Invoke(null, ["Import-DscResource -ModuleName __MissingModule_RegisterKeywords__ -ModuleVersion 9.9.9.9"])!;
+            var modules = (IList)_getModulesToLoad.Invoke(null, ["Import-DscResource -ModuleName __MissingModule_RegisterKeywords__ -ModuleVersion 9.9.9.9"])!;
 
             var warnings = CaptureWarnings(() => _registerKeywords.Invoke(null, [modules, "prefix - "]));
 
@@ -338,35 +342,6 @@ public class DscParserPrivateMethodTests
         var inner = Assert.IsType<InvalidOperationException>(ex.InnerException);
 
         Assert.Contains("Error parsing configuration: Missing closing curly brace.", inner.Message);
-    }
-
-    #endregion
-
-    #region InitializeDscResources
-
-    [Fact]
-    public void InitializeDscResources_WithNoModulesToLoad_ShouldLeaveTheResourceCacheEmpty()
-    {
-        try
-        {
-            DscParser.ClearCaches();
-            var modules = (System.Collections.IList)_getModulesToLoad.Invoke(null, ["Configuration Foo { }"])!;
-            Assert.Empty(modules);
-
-            _initializeDscResources.Invoke(
-                null,
-                [modules, new List<DscResourceInfo> { new() { Name = "Archive" } }]);
-
-            var exception = Assert.Throws<InvalidOperationException>(
-                () => DscParser.ConvertToDscObject(content: "Configuration Test { Node localhost { } }"));
-
-            Assert.Contains("No DSC resources loaded", exception.Message, StringComparison.Ordinal);
-        }
-        finally
-        {
-            DscParser.ClearCaches();
-            DscKeywordRegistry.Reset();
-        }
     }
 
     #endregion
@@ -572,7 +547,7 @@ public class DscParserPrivateMethodTests
     {
         var sb = new StringBuilder();
 
-        _appendProperty.Invoke(null, [sb, "Ratio", 3.14, " ", "    ", 0]);
+        _appendProperty.Invoke(null, [sb, "Ratio", 3.14, 1, "    ", 0]);
 
         Assert.Equal("        Ratio = 3.14" + Environment.NewLine, sb.ToString());
     }

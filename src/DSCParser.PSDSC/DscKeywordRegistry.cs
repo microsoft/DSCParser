@@ -43,7 +43,10 @@ namespace DSCParser.PSDSC
         private static bool t_staleWarningIssued;
 
         [ThreadStatic]
-        private static int t_expectedCachedKeywordCount;
+        private static int t_expectedCachedClassCount;
+
+        [ThreadStatic]
+        private static List<DynamicKeyword>? t_keywordSnapshot;
 
         // Registered into the class cache by LoadDefaultCimKeywords and dies with it, so its
         // absence while the bookkeeping claims otherwise means the engine wiped the cache.
@@ -62,14 +65,28 @@ namespace DSCParser.PSDSC
                     return false;
                 }
 
-                return t_expectedCachedKeywordCount == 0
-                    || CurrentCachedKeywordCount() >= t_expectedCachedKeywordCount;
+                return t_expectedCachedClassCount == 0
+                    || CurrentCachedClassCount() >= t_expectedCachedClassCount;
             }
         }
 
-        private static int CurrentCachedKeywordCount()
+        private static int CurrentCachedClassCount()
         {
-            return DscClassCacheReflection.GetCachedKeywords()?.Count() ?? 0;
+            int count = DscClassCacheReflection.GetCachedClassCount();
+
+            return count >= 0
+                ? count
+                : DscClassCacheReflection.GetCachedKeywords()?.Count() ?? 0;
+        }
+
+        internal static List<DynamicKeyword> GetKeywordSnapshot()
+        {
+            return t_keywordSnapshot ??= DscClassCacheReflection.GetCachedKeywords()?.ToList() ?? [];
+        }
+
+        private static void InvalidateKeywordSnapshot()
+        {
+            t_keywordSnapshot = null;
         }
 
         /// <summary>
@@ -92,12 +109,13 @@ namespace DSCParser.PSDSC
                 }
 
                 ImportModule(module);
+                InvalidateKeywordSnapshot();
 
                 // A later request that names no version is satisfied by any registered version.
                 _ = ImportedModules.Add(GetModuleKey(module.Name, null));
             }
 
-            t_expectedCachedKeywordCount = CurrentCachedKeywordCount();
+            t_expectedCachedClassCount = CurrentCachedClassCount();
         }
 
         /// <summary>
@@ -141,7 +159,9 @@ namespace DSCParser.PSDSC
             t_defaultKeywordsLoaded = false;
             t_engineUnsupported = false;
             t_defaultTableKeywords = null;
-            t_expectedCachedKeywordCount = 0;
+            t_expectedCachedClassCount = 0;
+            InvalidateKeywordSnapshot();
+            PowerShellInvoker.ClearModuleCatalog();
             DscClassCacheReflection.ResetDynamicKeywords();
             DscClassCacheReflection.ClearCache();
         }
@@ -156,12 +176,13 @@ namespace DSCParser.PSDSC
             }
 
             DscClassCacheReflection.LoadDefaultCimKeywords();
+            InvalidateKeywordSnapshot();
             t_defaultKeywordsLoaded = true;
             t_engineUnsupported = !EngineStateIsFresh;
 
             List<DynamicKeyword> snapshot = [];
-            IEnumerable<string> defaultNames =
-                (DscClassCacheReflection.GetCachedKeywords()?.Select(k => k.Keyword) ?? [])
+            IEnumerable<string> defaultNames = GetKeywordSnapshot()
+                .Select(k => k.Keyword)
                 .Concat([NodeKeyword, "Import-DscResource"]);
             foreach (string name in defaultNames.Distinct(StringComparer.OrdinalIgnoreCase))
             {
@@ -172,7 +193,7 @@ namespace DSCParser.PSDSC
             }
 
             t_defaultTableKeywords = snapshot;
-            t_expectedCachedKeywordCount = CurrentCachedKeywordCount();
+            t_expectedCachedClassCount = CurrentCachedClassCount();
         }
 
         /// <summary>
@@ -220,8 +241,6 @@ namespace DSCParser.PSDSC
         {
             EnsureDefaultKeywordsLoaded();
 
-            List<DynamicKeyword>? cachedKeywords = DscClassCacheReflection.GetCachedKeywords()?.ToList();
-
             if (!DynamicKeyword.ContainsKeyword(NodeKeyword))
             {
                 if (t_defaultTableKeywords is { Count: > 0 } defaults)
@@ -237,17 +256,15 @@ namespace DSCParser.PSDSC
                 else if (ImportedModules.Count == 0)
                 {
                     DscClassCacheReflection.LoadDefaultCimKeywords();
+                    InvalidateKeywordSnapshot();
                 }
             }
 
-            if (cachedKeywords is not null)
+            foreach (DynamicKeyword keyword in GetKeywordSnapshot())
             {
-                foreach (DynamicKeyword keyword in cachedKeywords)
+                if (!DynamicKeyword.ContainsKeyword(keyword.Keyword))
                 {
-                    if (!DynamicKeyword.ContainsKeyword(keyword.Keyword))
-                    {
-                        DynamicKeyword.AddKeyword(keyword);
-                    }
+                    DynamicKeyword.AddKeyword(keyword);
                 }
             }
         }
@@ -366,7 +383,6 @@ namespace DSCParser.PSDSC
                 }
 
                 DscClassCacheReflection.ImportCimKeywordsFromModule(module, resourceName);
-                DscClassCacheReflection.ImportScriptKeywordsFromModule(module, resourceName);
             }
         }
 
@@ -374,14 +390,7 @@ namespace DSCParser.PSDSC
         {
             try
             {
-                using PowerShell ps = PowerShell.Create();
-                _ = ps.AddCommand("Get-Module")
-                    .AddParameter("Name", moduleName)
-                    .AddParameter("ListAvailable");
-
-                IEnumerable<PSModuleInfo> found = ps.Invoke()
-                    .Select(r => r.BaseObject)
-                    .OfType<PSModuleInfo>();
+                IEnumerable<PSModuleInfo> found = PowerShellInvoker.ListAvailableModules([moduleName]);
 
                 if (version is not null)
                 {

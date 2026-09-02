@@ -14,11 +14,42 @@ namespace DSCParser.Tests;
 /// The cmdlet is invoked through a real runspace with the cmdlet registered into the session,
 /// so BeginProcessing / ProcessRecord / CheckResourcesFound run against a live CommandRuntime.
 /// </summary>
-public class GetDscResourceCommandTests
+public class GetDscResourceCommandTests : IDisposable
 {
     private static readonly MethodInfo _checkResourcesFound =
         typeof(GetDscResourceCommand).GetMethod("CheckResourcesFound", BindingFlags.NonPublic | BindingFlags.Instance)
         ?? throw new InvalidOperationException("CheckResourcesFound method not found");
+
+    private readonly string? _originalModulePath = Environment.GetEnvironmentVariable("PSModulePath");
+
+    public GetDscResourceCommandTests()
+    {
+        Environment.SetEnvironmentVariable("PSModulePath", FixtureModulePath());
+        PowerShellInvoker.ClearModuleCatalog();
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable("PSModulePath", _originalModulePath);
+        PowerShellInvoker.ClearModuleCatalog();
+    }
+
+    private static string FixtureModulePath()
+    {
+        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            string candidate = Path.Combine(directory.FullName, "Tests", "Fixtures", "Modules");
+            if (Directory.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Tests/Fixtures/Modules was not found above the test assembly.");
+    }
 
     private static PowerShell CreateCmdletPowerShell()
     {

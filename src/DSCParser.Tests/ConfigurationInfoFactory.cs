@@ -28,9 +28,17 @@ internal static class ConfigurationInfoFactory
 
     public static ConfigurationInfo Create(string name, string parameterBlock)
     {
+        Runspace? previous = Runspace.DefaultRunspace;
         EnsureDefaultRunspace();
 
-        return (ConfigurationInfo)Ctor.Invoke([name, ScriptBlock.Create(parameterBlock), null]);
+        try
+        {
+            return (ConfigurationInfo)Ctor.Invoke([name, ScriptBlock.Create(parameterBlock), null]);
+        }
+        finally
+        {
+            Runspace.DefaultRunspace = previous;
+        }
     }
 
     public static void SetModule(ConfigurationInfo configuration, PSModuleInfo? module)

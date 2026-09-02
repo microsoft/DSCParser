@@ -127,27 +127,12 @@ namespace DSCParser.PSDSC
         {
             try
             {
-                using PowerShell ps = PowerShell.Create();
-                if (!string.IsNullOrEmpty(moduleName))
-                {
-                    _ = ps.AddCommand("Get-Module")
-                      .AddParameter("ListAvailable", true)
-                      .AddParameter("Name", moduleName);
-                }
-                else
-                {
-                    var dscModules = DscResourceHelpers.GetDscResourceModules();
-                    if (dscModules.Count == 0)
-                    {
-                        return null;
-                    }
+                IEnumerable<string> names = string.IsNullOrEmpty(moduleName)
+                    ? DscResourceHelpers.GetDscResourceModules()
+                    : [moduleName!];
 
-                    _ = ps.AddCommand("Get-Module")
-                      .AddParameter("ListAvailable", true)
-                      .AddParameter("Name", dscModules.ToArray());
-                }
-
-                return ps.Invoke().Select(r => r.BaseObject).OfType<PSModuleInfo>().ToArray();
+                PSModuleInfo[] modules = PowerShellInvoker.ListAvailableModules(names);
+                return modules.Length == 0 && string.IsNullOrEmpty(moduleName) ? null : modules;
             }
             catch (Exception ex)
             {
@@ -156,30 +141,26 @@ namespace DSCParser.PSDSC
             }
         }
 
-        private static DynamicKeyword[] GetCachedKeywords(string? moduleName)
+        private static IEnumerable<DynamicKeyword> GetCachedKeywords(string? moduleName)
         {
-            var keywords = DscClassCacheReflection.GetCachedKeywords();
-
-            return keywords is null
-                ? []
-                : keywords.Where(k =>
-                    !k.IsReservedKeyword &&
-                    !string.IsNullOrEmpty(k.ResourceName) &&
-                    !DscResourceHelpers.IsHiddenResource(k.ResourceName) &&
-                    (string.IsNullOrEmpty(moduleName) ||
-                        k.ImplementingModule.Equals(moduleName, StringComparison.OrdinalIgnoreCase)))
-                    .ToArray();
+            return DscKeywordRegistry.GetKeywordSnapshot().Where(k =>
+                !k.IsReservedKeyword &&
+                !string.IsNullOrEmpty(k.ResourceName) &&
+                !DscResourceHelpers.IsHiddenResource(k.ResourceName) &&
+                (string.IsNullOrEmpty(moduleName) ||
+                    k.ImplementingModule.Equals(moduleName, StringComparison.OrdinalIgnoreCase)));
         }
 
         private static ConfigurationInfo[] GetConfigurations()
         {
             try
             {
-                using PowerShell ps = PowerShell.Create();
-                _ = ps.AddCommand("Get-Command")
-                  .AddParameter("CommandType", "Configuration");
-
-                return ps.Invoke().Select(r => r.BaseObject).OfType<ConfigurationInfo>().ToArray();
+                return PowerShellInvoker.Invoke(ps => ps.AddCommand("Get-Command")
+                        .AddParameter("CommandType", "Configuration")
+                        .AddParameter("ListImported", true))
+                    .Select(r => r.BaseObject)
+                    .OfType<ConfigurationInfo>()
+                    .ToArray();
             }
             catch (Exception ex)
             {

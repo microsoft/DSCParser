@@ -1,5 +1,6 @@
 using Microsoft.Management.Infrastructure;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Management.Automation;
@@ -45,6 +46,10 @@ namespace DSCParser.PSDSC
 
         private static readonly MethodInfo? ClearCacheMethod =
             CacheType?.GetMethod("ClearCache", BindingFlags.Public | BindingFlags.Static);
+
+        private static readonly MethodInfo? GetCachedClassesMethod =
+            CacheType?.GetMethod("GetCachedClasses",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static, null, Type.EmptyTypes, null);
 
         private static readonly MethodInfo? ResetDynamicKeywordsMethod =
             typeof(DynamicKeyword).GetMethod("Reset", BindingFlags.Public | BindingFlags.Static);
@@ -106,6 +111,20 @@ namespace DSCParser.PSDSC
         public static List<string>? GetFileDefiningClass(string className)
         {
             return GetFileDefiningClassMethod?.Invoke(null, [className]) as List<string>;
+        }
+
+        public static int GetCachedClassCount()
+        {
+            try
+            {
+                return GetCachedClassesMethod?.Invoke(null, null) is ICollection classes
+                    ? classes.Count
+                    : -1;
+            }
+            catch
+            {
+                return -1;
+            }
         }
 
         /// <summary>

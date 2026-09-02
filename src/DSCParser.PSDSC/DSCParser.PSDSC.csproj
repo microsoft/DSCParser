@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="DSCParser.CSharp" />
     <InternalsVisibleTo Include="DSCParser.Tests" />
   </ItemGroup>
 
